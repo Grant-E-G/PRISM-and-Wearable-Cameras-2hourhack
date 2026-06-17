@@ -70,7 +70,7 @@ class TestVLMClientInit(unittest.TestCase):
                 VLMClient(provider=VLMProvider.GEMINI)
 
     def test_claude_init_with_key(self):
-        """Claude client initialises when API key is set."""
+        """Claude client initializes when API key is set."""
         with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
             import anthropic
             with patch("anthropic.Anthropic") as mock_cls:
