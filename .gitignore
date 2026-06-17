@@ -150,6 +150,7 @@ activemq-data/
 # Environments
 .env
 .envrc
+.conda/
 .venv
 env/
 venv/
@@ -205,6 +206,9 @@ tempCodeRunnerFile.py
 
 # Ruff stuff:
 .ruff_cache/
+
+# Private workshop/source notes with non-public links
+src/*.private.md
 
 # PyPI configuration file
 .pypirc

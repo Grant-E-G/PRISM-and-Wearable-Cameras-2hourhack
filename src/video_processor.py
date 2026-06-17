@@ -1,13 +1,7 @@
 """Video frame extraction utilities for lab video analysis."""
 
 import base64
-import os
 from pathlib import Path
-from typing import Generator
-
-import cv2
-import numpy as np
-from PIL import Image
 
 
 def extract_frames(
@@ -31,6 +25,8 @@ def extract_frames(
     path = Path(video_path)
     if not path.exists():
         raise FileNotFoundError(f"Video file not found: {video_path}")
+
+    import cv2  # noqa: PLC0415
 
     cap = cv2.VideoCapture(str(path))
     if not cap.isOpened():
@@ -89,6 +85,8 @@ def extract_frames_at_timestamps(
     if not path.exists():
         raise FileNotFoundError(f"Video file not found: {video_path}")
 
+    import cv2  # noqa: PLC0415
+
     cap = cv2.VideoCapture(str(path))
     if not cap.isOpened():
         raise ValueError(f"Cannot open video file: {video_path}")
@@ -129,6 +127,8 @@ def get_video_metadata(video_path: str) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"Video file not found: {video_path}")
 
+    import cv2  # noqa: PLC0415
+
     cap = cv2.VideoCapture(str(path))
     if not cap.isOpened():
         raise ValueError(f"Cannot open video file: {video_path}")
@@ -148,8 +148,11 @@ def get_video_metadata(video_path: str) -> dict:
     }
 
 
-def _frame_to_base64(frame: np.ndarray, resize_width: int | None) -> str:
+def _frame_to_base64(frame: object, resize_width: int | None) -> str:
     """Convert an OpenCV frame (BGR) to a base64-encoded JPEG string."""
+    import cv2  # noqa: PLC0415
+    from PIL import Image  # noqa: PLC0415
+
     if resize_width is not None:
         h, w = frame.shape[:2]
         if w > resize_width:

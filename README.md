@@ -16,6 +16,7 @@ challenge tasks from the
 | **A** | Dictyostelium Growth Assay (Protein Quantification) | Number of wells pipetted into a 96-well plate |
 | **B** | Antimony Sulfide Nanocrystal Synthesis (Hot Injection) | Exact color changes at each ~30-minute reaction interval |
 | **C** | Yeast Transformation Protocol | OD values from spectrophotometer displays (OCR) |
+| **C demo** | Yeast Transformation Protocol | OD values, observed actions, and a compact protocol draft |
 | **D** | LB Agar Plate Preparation | Volume of liquid added (reading graduated glassware) |
 | **Stretch** | Any | Full reproducible written protocol synthesised from video + extracted data |
 
@@ -35,6 +36,7 @@ challenge tasks from the
 │       ├── well_plate_analyzer.py   # Task A – well counting
 │       ├── color_change_analyzer.py # Task B – color change detection
 │       ├── od_value_analyzer.py     # Task C – OD value OCR
+│       ├── yeast_transformation_analyzer.py # Task C demo – protocol capture
 │       ├── volume_analyzer.py       # Task D – liquid volume reading
 │       └── protocol_writer.py       # Stretch goal – protocol generation
 └── tests/
@@ -45,13 +47,20 @@ challenge tasks from the
 
 ## Setup
 
-### 1. Install dependencies
+### 1. Create the conda environment
+
+```bash
+conda env create -p ./.conda -f environment.yml
+conda activate ./.conda
+```
+
+### 2. Install dependencies with pip only
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Set API keys
+### 3. Set API keys
 
 Create a `.env` file in the project root (or export the variables):
 
@@ -78,6 +87,9 @@ python main.py --video video_b.mp4 --task color_change
 
 # Video C – read OD values from spectrophotometer display
 python main.py --video video_c.mp4 --task od_values
+
+# Video C demo – extract a yeast transformation protocol draft
+python main.py --video video_c.mp4 --task yeast_protocol
 
 # Video D – read liquid volume from graduated glassware
 python main.py --video video_d.mp4 --task volume
@@ -158,8 +170,7 @@ problem statement notes that video analysis can cost a few dollars.  Pass
 ## Running Tests
 
 ```bash
-pip install pytest
-python -m pytest tests/ -v
+./.conda/bin/python -m pytest tests/ -v
 ```
 
 Tests mock both the VLM responses and video I/O so no API keys or real video

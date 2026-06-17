@@ -11,6 +11,9 @@ python main.py --video path/to/video_b.mp4 --task color_change --provider gemini
 # Analyze Video C (OD values):
 python main.py --video path/to/video_c.mp4 --task od_values
 
+# Analyze Video C (yeast transformation protocol demo):
+python main.py --video path/to/video_c.mp4 --task yeast_protocol
+
 # Analyze Video D (liquid volume):
 python main.py --video path/to/video_d.mp4 --task volume
 
@@ -27,7 +30,10 @@ import os
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = lambda: None
 
 # Load .env file if present (for API keys)
 load_dotenv()
@@ -49,12 +55,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--task",
         required=True,
-        choices=["well_plate", "color_change", "od_values", "volume", "protocol", "all"],
+        choices=[
+            "well_plate",
+            "color_change",
+            "od_values",
+            "yeast_protocol",
+            "volume",
+            "protocol",
+            "all",
+        ],
         help=(
             "Analysis task to run:\n"
             "  well_plate   – Video A: count wells pipetted in 96-well plate\n"
             "  color_change – Video B: detect color changes over time\n"
             "  od_values    – Video C: read OD values from display\n"
+            "  yeast_protocol – Video C: draft yeast transformation protocol\n"
             "  volume       – Video D: read liquid volume from glassware\n"
             "  protocol     – Stretch goal: write full lab protocol\n"
             "  all          – Run all tasks then write a protocol"
@@ -99,6 +114,7 @@ def run_task(task: str, vlm_client, video_path: str, extra_kwargs: dict) -> dict
     from src.analyzers.well_plate_analyzer import WellPlateAnalyzer
     from src.analyzers.color_change_analyzer import ColorChangeAnalyzer
     from src.analyzers.od_value_analyzer import ODValueAnalyzer
+    from src.analyzers.yeast_transformation_analyzer import YeastTransformationAnalyzer
     from src.analyzers.volume_analyzer import VolumeAnalyzer
     from src.analyzers.protocol_writer import ProtocolWriter
 
@@ -106,7 +122,11 @@ def run_task(task: str, vlm_client, video_path: str, extra_kwargs: dict) -> dict
         "well_plate": WellPlateAnalyzer,
         "color_change": ColorChangeAnalyzer,
         "od_values": ODValueAnalyzer,
+        "yeast_protocol": YeastTransformationAnalyzer,
         "volume": VolumeAnalyzer,
+    }
+    challenge_analyzers = {
+        name: cls for name, cls in analyzers.items() if name != "yeast_protocol"
     }
 
     if task == "protocol":
@@ -114,7 +134,7 @@ def run_task(task: str, vlm_client, video_path: str, extra_kwargs: dict) -> dict
 
     if task == "all":
         all_results = {}
-        for name, cls in analyzers.items():
+        for name, cls in challenge_analyzers.items():
             print(f"  Running {name} ...", file=sys.stderr)
             all_results[name] = cls(vlm_client).analyze(video_path, **extra_kwargs)
         print("  Writing protocol ...", file=sys.stderr)

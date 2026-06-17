@@ -72,14 +72,15 @@ class TestVLMClientInit(unittest.TestCase):
     def test_claude_init_with_key(self):
         """Claude client initializes when API key is set."""
         with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
-            import anthropic
-            with patch("anthropic.Anthropic") as mock_cls:
-                mock_cls.return_value = MagicMock()
-                from importlib import reload
-                import src.vlm_client as vc
-                reload(vc)
-                client = vc.VLMClient(provider=vc.VLMProvider.CLAUDE)
-                self.assertEqual(client.provider, vc.VLMProvider.CLAUDE)
+            fake_anthropic = types.SimpleNamespace(Anthropic=MagicMock())
+            with patch.dict("sys.modules", {"anthropic": fake_anthropic}):
+                with patch("anthropic.Anthropic") as mock_cls:
+                    mock_cls.return_value = MagicMock()
+                    from importlib import reload
+                    import src.vlm_client as vc
+                    reload(vc)
+                    client = vc.VLMClient(provider=vc.VLMProvider.CLAUDE)
+                    self.assertEqual(client.provider, vc.VLMProvider.CLAUDE)
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +245,53 @@ class TestODValueAnalyzer(unittest.TestCase):
         self.assertEqual(result["task"], "od_value_reading")
         self.assertEqual(len(result["all_od_values"]), 2)
         self.assertAlmostEqual(result["all_od_values"][1]["od_value"], 0.312)
+
+
+class TestYeastTransformationAnalyzer(unittest.TestCase):
+    def test_analyze_returns_protocol_demo(self):
+        from src.analyzers.yeast_transformation_analyzer import (
+            YeastTransformationAnalyzer,
+        )
+
+        response = {
+            "od_values": [
+                {"sample_id": "culture", "od_value": 0.62, "wavelength_nm": 600}
+            ],
+            "observed_actions": [
+                {
+                    "timestamp_sec": 12,
+                    "action": "Measure yeast culture OD",
+                    "materials": ["spectrophotometer", "cuvette"],
+                    "measurement": "OD600 0.62",
+                    "confidence": "high",
+                }
+            ],
+            "protocol": {
+                "title": "Yeast Transformation Protocol",
+                "materials": ["yeast culture", "spectrophotometer"],
+                "steps": ["Measure yeast culture density at OD600."],
+                "uncertainties": ["Transformation reagent volumes not visible."],
+            },
+            "notes": "Display is readable.",
+        }
+        vlm = _make_mock_vlm(response)
+
+        with _patch_extract_frames(
+            [SAMPLE_FRAME], "src.analyzers.yeast_transformation_analyzer"
+        ):
+            result = YeastTransformationAnalyzer(vlm).analyze("fake.mp4")
+
+        self.assertEqual(result["task"], "yeast_transformation_protocol")
+        self.assertEqual(result["od_values"][0]["od_value"], 0.62)
+        self.assertIn("Measure yeast", result["protocol"]["steps"][0])
+
+    def test_bad_json_returns_uncertainty(self):
+        from src.analyzers.yeast_transformation_analyzer import _parse_json_response
+
+        result = _parse_json_response("plain text")
+
+        self.assertEqual(result["od_values"], [])
+        self.assertIn("Could not parse", result["protocol"]["uncertainties"][0])
 
 
 class TestVolumeAnalyzer(unittest.TestCase):

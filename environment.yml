@@ -1,0 +1,9 @@
+name: prism-video-analyzer
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pytest
+  - pip:
+      - -r requirements.txt
