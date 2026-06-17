@@ -69,6 +69,36 @@ class TestVLMClientInit(unittest.TestCase):
             with self.assertRaises(EnvironmentError):
                 VLMClient(provider=VLMProvider.GEMINI)
 
+    def test_ollama_init_needs_no_key(self):
+        with patch.dict("os.environ", {}, clear=True):
+            from src.vlm_client import VLMClient, VLMProvider
+
+            client = VLMClient(provider=VLMProvider.OLLAMA)
+
+        self.assertEqual(client.provider, VLMProvider.OLLAMA)
+        self.assertEqual(client.model, "qwen2.5vl:7b")
+
+    def test_ollama_analyze_frames(self):
+        from src.vlm_client import VLMClient, VLMProvider
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return b'{"response": "{\\"ok\\": true}"}'
+
+        with patch("urllib.request.urlopen", return_value=FakeResponse()) as mock_urlopen:
+            client = VLMClient(provider=VLMProvider.OLLAMA)
+            result = client.analyze_frames([SAMPLE_FRAME], "Respond using JSON")
+
+        self.assertEqual(result, '{"ok": true}')
+        request = mock_urlopen.call_args[0][0]
+        self.assertEqual(request.full_url, "http://localhost:11434/api/generate")
+
     def test_claude_init_with_key(self):
         """Claude client initializes when API key is set."""
         with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
@@ -266,6 +296,24 @@ class TestYeastTransformationAnalyzer(unittest.TestCase):
                     "confidence": "high",
                 }
             ],
+            "reproducibility_risks": [
+                {
+                    "timestamp_sec": 12,
+                    "action": "Measure yeast culture OD",
+                    "issue": "Sample ID is not visible in the frame.",
+                    "severity": "High",
+                    "suggested_fix": "Record the sample ID alongside the OD reading.",
+                    "confidence": "medium",
+                }
+            ],
+            "thumbs_up": [
+                {
+                    "timestamp_sec": 12,
+                    "practice": "Culture density is measured before transformation.",
+                    "why_it_helps": "OD600 anchors the culture state for reproduction.",
+                    "confidence": "high",
+                }
+            ],
             "protocol": {
                 "title": "Yeast Transformation Protocol",
                 "materials": ["yeast culture", "spectrophotometer"],
@@ -283,6 +331,8 @@ class TestYeastTransformationAnalyzer(unittest.TestCase):
 
         self.assertEqual(result["task"], "yeast_transformation_protocol")
         self.assertEqual(result["od_values"][0]["od_value"], 0.62)
+        self.assertEqual(result["reproducibility_risks"][0]["severity"], "High")
+        self.assertIn("OD600", result["thumbs_up"][0]["why_it_helps"])
         self.assertIn("Measure yeast", result["protocol"]["steps"][0])
 
     def test_bad_json_returns_uncertainty(self):
@@ -291,6 +341,8 @@ class TestYeastTransformationAnalyzer(unittest.TestCase):
         result = _parse_json_response("plain text")
 
         self.assertEqual(result["od_values"], [])
+        self.assertEqual(result["reproducibility_risks"], [])
+        self.assertEqual(result["thumbs_up"], [])
         self.assertIn("Could not parse", result["protocol"]["uncertainties"][0])
 
 

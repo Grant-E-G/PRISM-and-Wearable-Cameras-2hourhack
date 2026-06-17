@@ -16,6 +16,8 @@ Extract only information supported by the frames. Focus on:
 - Reagents, sample identifiers, temperatures, timings, volumes, and equipment
 - Human actions that matter for reproducing the protocol
 - Tacit details such as mixing, incubation setup, tube handling, or plating
+- Actions or omissions that could make the work hard to reproduce
+- Extra good practices that improve reproducibility
 
 Output only valid JSON in this exact shape:
 {
@@ -28,6 +30,24 @@ Output only valid JSON in this exact shape:
       "action": "<short action>",
       "materials": ["<material or equipment>", "..."],
       "measurement": "<visible value or null>",
+      "confidence": "<high|medium|low>"
+    }
+  ],
+  "reproducibility_risks": [
+    {
+      "timestamp_sec": <number>,
+      "action": "<observed action or omission>",
+      "issue": "<why this could make the lab work unreproducible>",
+      "severity": "<Very High|High|Medium|Low>",
+      "suggested_fix": "<concrete correction or note to capture>",
+      "confidence": "<high|medium|low>"
+    }
+  ],
+  "thumbs_up": [
+    {
+      "timestamp_sec": <number>,
+      "practice": "<extra good practice observed>",
+      "why_it_helps": "<how this improves reproducibility>",
       "confidence": "<high|medium|low>"
     }
   ],
@@ -88,6 +108,8 @@ def _result(video_path: str, raw: str, data: dict) -> dict:
         "video_path": video_path,
         "od_values": data.get("od_values", []),
         "observed_actions": data.get("observed_actions", []),
+        "reproducibility_risks": data.get("reproducibility_risks", []),
+        "thumbs_up": data.get("thumbs_up", []),
         "protocol": {
             "title": protocol.get("title", "Yeast Transformation Protocol"),
             "materials": protocol.get("materials", []),
@@ -110,6 +132,8 @@ def _parse_json_response(text: str) -> dict:
     return {
         "od_values": [],
         "observed_actions": [],
+        "reproducibility_risks": [],
+        "thumbs_up": [],
         "protocol": {
             "title": "Yeast Transformation Protocol",
             "materials": [],

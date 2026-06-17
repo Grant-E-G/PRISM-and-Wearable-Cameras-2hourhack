@@ -16,7 +16,7 @@ challenge tasks from the
 | **A** | Dictyostelium Growth Assay (Protein Quantification) | Number of wells pipetted into a 96-well plate |
 | **B** | Antimony Sulfide Nanocrystal Synthesis (Hot Injection) | Exact color changes at each ~30-minute reaction interval |
 | **C** | Yeast Transformation Protocol | OD values from spectrophotometer displays (OCR) |
-| **C demo** | Yeast Transformation Protocol | OD values, observed actions, and a compact protocol draft |
+| **C demo** | Yeast Transformation Protocol | OD values, observed actions, reproducibility risks, good practices, and a compact protocol draft |
 | **D** | LB Agar Plate Preparation | Volume of liquid added (reading graduated glassware) |
 | **Stretch** | Any | Full reproducible written protocol synthesised from video + extracted data |
 
@@ -72,6 +72,12 @@ ANTHROPIC_API_KEY=sk-ant-...
 GOOGLE_API_KEY=AIza...
 ```
 
+Claude and Gemini are optional if you run locally with Ollama:
+
+```bash
+ollama pull qwen2.5vl:7b
+```
+
 ---
 
 ## Usage
@@ -88,8 +94,8 @@ python main.py --video video_b.mp4 --task color_change
 # Video C – read OD values from spectrophotometer display
 python main.py --video video_c.mp4 --task od_values
 
-# Video C demo – extract a yeast transformation protocol draft
-python main.py --video video_c.mp4 --task yeast_protocol
+# Video C demo – extract a yeast transformation protocol draft locally
+python main.py --video video_c.mp4 --task yeast_protocol --provider ollama
 
 # Video D – read liquid volume from graduated glassware
 python main.py --video video_d.mp4 --task volume
@@ -101,11 +107,29 @@ python main.py --video video_a.mp4 --task protocol
 python main.py --video video_a.mp4 --task all --output results.json
 ```
 
+### Annotation Viewer
+
+```bash
+python -m http.server 8000
+```
+
+Open `http://localhost:8000/gui/` to play the demo video with inline
+annotations. To create a fresh annotation file:
+
+```bash
+./.conda/bin/python main.py \
+  --video downloads/yeast_protocol_8s.mp4 \
+  --task yeast_protocol \
+  --provider claude \
+  --max-frames 3 \
+  --output downloads/yeast_protocol_8s.annotations.json
+```
+
 #### Options
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--provider` | `claude` or `gemini` | `claude` |
+| `--provider` | `claude`, `gemini`, or `ollama` | `claude` |
 | `--model` | Override the model name | provider default |
 | `--output` | Write JSON to file instead of stdout | stdout |
 | `--interval` | Frame sampling interval in seconds | task default |
@@ -120,6 +144,9 @@ from src.analyzers.od_value_analyzer import ODValueAnalyzer
 from src.analyzers.protocol_writer import ProtocolWriter
 
 vlm = VLMClient(provider=VLMProvider.CLAUDE)
+
+# For local no-key runs
+vlm = VLMClient(provider=VLMProvider.OLLAMA)
 
 # Task A
 result_a = WellPlateAnalyzer(vlm).analyze("video_a.mp4")
@@ -159,6 +186,10 @@ challenges called out in the hackathon spec:
 Each analyzer instructs the VLM to return a strict JSON schema with a
 `_parse_json_response` fallback to plain text if parsing fails.  The final
 result dict always has the same keys so downstream code is predictable.
+
+The yeast protocol demo also emits `reproducibility_risks` with severity values
+of `Very High`, `High`, `Medium`, or `Low`, plus `thumbs_up` annotations for
+extra good practices observed in the footage.
 
 ### Cost awareness
 Default `max_frames` caps are set conservatively (20–40 frames) since the

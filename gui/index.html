@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PRISM Annotation Viewer</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="viewer" aria-label="Video annotation viewer">
+        <div class="viewer-header">
+          <div>
+            <h1>PRISM Annotation Viewer</h1>
+            <p id="videoTitle">Yeast transformation protocol</p>
+          </div>
+          <div class="source-controls">
+            <label>
+              Video
+              <input id="videoFile" type="file" accept="video/*">
+            </label>
+            <label>
+              JSON
+              <input id="annotationFile" type="file" accept="application/json,.json">
+            </label>
+          </div>
+        </div>
+
+        <div class="video-stage">
+          <video id="video" controls playsinline preload="metadata"></video>
+          <div id="overlay" class="overlay" aria-live="polite"></div>
+        </div>
+
+        <div id="timeline" class="timeline" aria-label="Annotation timeline"></div>
+
+        <section class="annotation-panel" aria-label="Current annotations">
+          <div class="panel-header">
+            <span id="timecode">00:00.0</span>
+            <div class="legend">
+              <span class="legend-item risk">Risk</span>
+              <span class="legend-item good">Thumbs up</span>
+              <span class="legend-item action">Action</span>
+            </div>
+          </div>
+          <div id="annotationList" class="annotation-list"></div>
+        </section>
+      </section>
+    </main>
+    <script src="./viewer.js"></script>
+  </body>
+</html>

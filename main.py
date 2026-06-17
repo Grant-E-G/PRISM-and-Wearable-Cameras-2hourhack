@@ -11,8 +11,8 @@ python main.py --video path/to/video_b.mp4 --task color_change --provider gemini
 # Analyze Video C (OD values):
 python main.py --video path/to/video_c.mp4 --task od_values
 
-# Analyze Video C (yeast transformation protocol demo):
-python main.py --video path/to/video_c.mp4 --task yeast_protocol
+# Analyze Video C locally with Ollama / Qwen2.5-VL:
+python main.py --video path/to/video_c.mp4 --task yeast_protocol --provider ollama
 
 # Analyze Video D (liquid volume):
 python main.py --video path/to/video_d.mp4 --task volume
@@ -77,7 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--provider",
-        choices=["claude", "gemini"],
+        choices=["claude", "gemini", "ollama"],
         default="claude",
         help="VLM provider to use (default: claude).",
     )
