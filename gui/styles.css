@@ -249,6 +249,13 @@ video {
   border: 1px solid var(--line);
   border-left: 5px solid var(--action);
   border-radius: 8px;
+  cursor: pointer;
+}
+
+.annotation:hover,
+.annotation:focus-visible {
+  outline: 2px solid rgba(184, 165, 255, 0.65);
+  outline-offset: 2px;
 }
 
 .annotation.risk {

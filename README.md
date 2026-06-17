@@ -30,7 +30,7 @@ challenge tasks from the
 ├── requirements.txt
 ├── src/
 │   ├── video_processor.py           # Frame extraction from video files
-│   ├── vlm_client.py                # Claude / Gemini API wrapper
+│   ├── vlm_client.py                # Claude / Gemini / Ollama API wrapper
 │   └── analyzers/
 │       ├── base_analyzer.py         # Abstract base class
 │       ├── well_plate_analyzer.py   # Task A – well counting
@@ -39,6 +39,10 @@ challenge tasks from the
 │       ├── yeast_transformation_analyzer.py # Task C demo – protocol capture
 │       ├── volume_analyzer.py       # Task D – liquid volume reading
 │       └── protocol_writer.py       # Stretch goal – protocol generation
+├── gui/
+│   ├── index.html                   # Browser annotation viewer
+│   ├── styles.css
+│   └── viewer.js
 └── tests/
     └── test_analyzers.py
 ```
@@ -109,20 +113,105 @@ python main.py --video video_a.mp4 --task all --output results.json
 
 ### Annotation Viewer
 
-```bash
-python -m http.server 8000
-```
+The GUI is a static browser viewer. It plays the lab video at the top, overlays
+active annotations on the video, shows full annotation text below, and lets you
+jump by clicking timeline markers or annotation cards.
 
-Open `http://localhost:8000/gui/` to play the demo video with inline
-annotations. To create a fresh annotation file:
+The current local demo defaults to:
+
+- Video: `downloads/yeast_protocol_1min_gui.mp4`
+- JSON: `downloads/yeast_protocol_1min.annotations.json`
+
+Both files live in `downloads/`, which is ignored by git.
+
+#### Generate Annotations
+
+Run the analyzer and write JSON for the viewer:
 
 ```bash
 ./.conda/bin/python main.py \
-  --video downloads/yeast_protocol_8s.mp4 \
+  --video downloads/yeast_protocol_1min.mp4 \
   --task yeast_protocol \
   --provider claude \
-  --max-frames 3 \
-  --output downloads/yeast_protocol_8s.annotations.json
+  --interval 5 \
+  --max-frames 12 \
+  --output downloads/yeast_protocol_1min.annotations.json
+```
+
+For a cheaper quick check, use fewer frames:
+
+```bash
+./.conda/bin/python main.py \
+  --video downloads/yeast_protocol_1min.mp4 \
+  --task yeast_protocol \
+  --provider claude \
+  --interval 10 \
+  --max-frames 6 \
+  --output downloads/yeast_protocol_1min.annotations.json
+```
+
+#### Optimize Video For The Browser
+
+If the GUI video seeking feels slow or jumps back to the beginning, create a
+smaller browser-facing copy:
+
+```bash
+ffmpeg -y \
+  -i downloads/yeast_protocol_1min.mp4 \
+  -map 0:v:0 \
+  -map 0:a? \
+  -map_metadata -1 \
+  -write_tmcd 0 \
+  -vf "scale='min(1280,iw)':-2" \
+  -c:v libx264 \
+  -preset veryfast \
+  -crf 23 \
+  -c:a aac \
+  -b:a 128k \
+  -movflags +faststart \
+  downloads/yeast_protocol_1min_gui.mp4
+```
+
+#### Start The Web Server
+
+```bash
+./.conda/bin/python -m http.server 8000
+```
+
+Open:
+
+```text
+http://127.0.0.1:8000/gui/
+```
+
+If your browser cached old assets, add a query string:
+
+```text
+http://127.0.0.1:8000/gui/?reload=1
+```
+
+#### Stop The Web Server
+
+If the server is running in the foreground, press `Ctrl-C` in that terminal.
+
+If you started it in the background, save the PID:
+
+```bash
+./.conda/bin/python -m http.server 8000 > /tmp/prism-gui.log 2>&1 &
+echo $! > /tmp/prism-gui.pid
+```
+
+Stop it later with:
+
+```bash
+kill "$(cat /tmp/prism-gui.pid)"
+rm /tmp/prism-gui.pid
+```
+
+Check whether port `8000` is already serving the GUI:
+
+```bash
+curl -I http://127.0.0.1:8000/gui/
 ```
 
 #### Options

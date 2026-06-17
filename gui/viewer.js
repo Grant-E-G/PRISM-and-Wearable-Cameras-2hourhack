@@ -1,5 +1,5 @@
-const DEFAULT_VIDEO = "../downloads/yeast_protocol_8s.mp4";
-const DEFAULT_ANNOTATIONS = "../downloads/yeast_protocol_8s.annotations.json";
+const DEFAULT_VIDEO = "../downloads/yeast_protocol_1min_gui.mp4";
+const DEFAULT_ANNOTATIONS = "../downloads/yeast_protocol_1min.annotations.json";
 const ACTIVE_WINDOW_SECONDS = 1.35;
 
 const video = document.querySelector("#video");
@@ -14,6 +14,7 @@ const annotationFile = document.querySelector("#annotationFile");
 let annotations = [];
 
 const toSeconds = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
 const formatTime = (seconds) => {
   const safe = Math.max(0, seconds || 0);
@@ -85,7 +86,12 @@ const renderPanel = (items) => {
   }
 
   annotationList.innerHTML = items.map((item) => `
-    <article class="annotation ${item.className}">
+    <article
+      class="annotation ${item.className}"
+      role="button"
+      tabindex="0"
+      data-time="${item.timestamp}"
+      title="Jump to ${formatTime(item.timestamp)}">
       <div class="meta">
         <span class="chip">${formatTime(item.timestamp)}</span>
         <span class="chip">${item.severity}</span>
@@ -96,6 +102,24 @@ const renderPanel = (items) => {
       ${item.detail ? `<p>${item.detail}</p>` : ""}
     </article>
   `).join("");
+};
+
+const seekTo = (seconds) => {
+  const fallbackDuration = Math.max(...annotations.map((item) => item.timestamp), 1);
+  const duration = Number.isFinite(video.duration) ? video.duration : fallbackDuration;
+  const target = clamp(toSeconds(seconds), 0, duration || fallbackDuration);
+
+  if (video.readyState < 1) {
+    video.addEventListener("loadedmetadata", () => seekTo(target), { once: true });
+    return;
+  }
+
+  if (typeof video.fastSeek === "function") {
+    video.fastSeek(target);
+  } else {
+    video.currentTime = target;
+  }
+  render();
 };
 
 const renderTimeline = () => {
@@ -144,9 +168,29 @@ video.addEventListener("loadedmetadata", () => {
 
 timeline.addEventListener("click", (event) => {
   const marker = event.target.closest("[data-time]");
-  if (!marker) return;
-  video.currentTime = Number(marker.dataset.time);
-  video.play().catch(() => {});
+  if (marker) {
+    seekTo(marker.dataset.time);
+    return;
+  }
+
+  const rect = timeline.getBoundingClientRect();
+  const ratio = clamp((event.clientX - rect.left) / rect.width, 0, 1);
+  const duration = video.duration || Math.max(...annotations.map((item) => item.timestamp), 1);
+  seekTo(ratio * duration);
+});
+
+annotationList.addEventListener("click", (event) => {
+  const card = event.target.closest("[data-time]");
+  if (!card) return;
+  seekTo(card.dataset.time);
+});
+
+annotationList.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const card = event.target.closest("[data-time]");
+  if (!card) return;
+  event.preventDefault();
+  seekTo(card.dataset.time);
 });
 
 videoFile.addEventListener("change", () => {
