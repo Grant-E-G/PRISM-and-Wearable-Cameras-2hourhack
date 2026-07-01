@@ -12,6 +12,7 @@ const videoFile = document.querySelector("#videoFile");
 const annotationFile = document.querySelector("#annotationFile");
 
 let annotations = [];
+let activeAnnotationKeys = new Set();
 
 const toSeconds = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -33,7 +34,8 @@ const severityClass = (severity = "") =>
   severity.toLowerCase().replace(/\s+/g, "-");
 
 const normalize = (data) => [
-  ...(data.reproducibility_risks || []).map((item) => ({
+  ...(data.reproducibility_risks || []).map((item, index) => ({
+    id: `risk-${index}`,
     type: "risk",
     timestamp: toSeconds(item.timestamp_sec),
     title: `${item.severity || "Risk"}: ${item.action || "Reproducibility risk"}`,
@@ -43,7 +45,8 @@ const normalize = (data) => [
     severity: item.severity || "Medium",
     className: `risk ${severityClass(item.severity || "Medium")}`,
   })),
-  ...(data.thumbs_up || []).map((item) => ({
+  ...(data.thumbs_up || []).map((item, index) => ({
+    id: `good-${index}`,
     type: "good",
     timestamp: toSeconds(item.timestamp_sec),
     title: `Thumbs up: ${item.practice || "Good practice"}`,
@@ -53,7 +56,8 @@ const normalize = (data) => [
     severity: "Good",
     className: "good",
   })),
-  ...(data.observed_actions || []).map((item) => ({
+  ...(data.observed_actions || []).map((item, index) => ({
+    id: `action-${index}`,
     type: "action",
     timestamp: toSeconds(item.timestamp_sec),
     title: item.action || "Observed action",
@@ -63,7 +67,7 @@ const normalize = (data) => [
     severity: "Action",
     className: "action",
   })),
-].sort((a, b) => a.timestamp - b.timestamp);
+].sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
 
 const activeAnnotations = () => {
   const current = video.currentTime || 0;
@@ -90,17 +94,18 @@ const renderOverlay = (items) => {
   `).join("");
 };
 
-const renderPanel = (items) => {
-  if (items.length === 0) {
-    annotationList.innerHTML = `<div class="empty">No annotation at this timestamp.</div>`;
+const renderPanel = () => {
+  if (annotations.length === 0) {
+    annotationList.innerHTML = `<div class="empty">No annotations loaded.</div>`;
     return;
   }
 
-  annotationList.innerHTML = items.map((item) => `
+  annotationList.innerHTML = annotations.map((item) => `
     <article
       class="annotation ${item.className}"
       role="button"
       tabindex="0"
+      data-id="${item.id}"
       data-time="${item.timestamp}"
       title="Jump to ${formatTime(item.timestamp)}">
       <div class="meta">
@@ -113,6 +118,13 @@ const renderPanel = (items) => {
       ${item.detail ? `<p>${item.detail}</p>` : ""}
     </article>
   `).join("");
+};
+
+const renderActivePanelState = (items) => {
+  activeAnnotationKeys = new Set(items.map((item) => item.id));
+  annotationList.querySelectorAll("[data-id]").forEach((card) => {
+    card.classList.toggle("active", activeAnnotationKeys.has(card.dataset.id));
+  });
 };
 
 const seekTo = (seconds) => {
@@ -148,7 +160,7 @@ const render = () => {
   timecode.textContent = formatTime(video.currentTime || 0);
   const active = activeAnnotations();
   renderOverlay(active);
-  renderPanel(active);
+  renderActivePanelState(active);
 };
 
 const loadAnnotations = async (source) => {
@@ -156,6 +168,7 @@ const loadAnnotations = async (source) => {
   const data = await response.json();
   annotations = normalize(data);
   videoTitle.textContent = data.protocol?.title || "Yeast transformation protocol";
+  renderPanel();
   renderTimeline();
   render();
 };
@@ -163,6 +176,7 @@ const loadAnnotations = async (source) => {
 video.src = DEFAULT_VIDEO;
 loadAnnotations(DEFAULT_ANNOTATIONS).catch(() => {
   annotations = [];
+  renderPanel();
   render();
 });
 
@@ -230,6 +244,7 @@ annotationFile.addEventListener("change", async () => {
   const data = JSON.parse(await file.text());
   annotations = normalize(data);
   videoTitle.textContent = data.protocol?.title || videoTitle.textContent;
+  renderPanel();
   renderTimeline();
   render();
 });
