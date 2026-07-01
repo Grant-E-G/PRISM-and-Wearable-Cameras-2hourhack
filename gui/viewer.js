@@ -15,6 +15,12 @@ let annotations = [];
 
 const toSeconds = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const annotationDuration = () =>
+  Math.max(...annotations.map((item) => item.timestamp), 1);
+const mediaDuration = () =>
+  Number.isFinite(video.duration) && video.duration > 0
+    ? video.duration
+    : annotationDuration();
 
 const formatTime = (seconds) => {
   const safe = Math.max(0, seconds || 0);
@@ -72,7 +78,12 @@ const activeAnnotations = () => {
 
 const renderOverlay = (items) => {
   overlay.innerHTML = items.slice(0, 3).map((item) => `
-    <article class="overlay-card ${item.className}">
+    <article
+      class="overlay-card ${item.className}"
+      role="button"
+      tabindex="0"
+      data-time="${item.timestamp}"
+      title="Jump to ${formatTime(item.timestamp)}">
       <strong>${item.title}</strong>
       <span>${item.body || item.detail || formatTime(item.timestamp)}</span>
     </article>
@@ -105,25 +116,20 @@ const renderPanel = (items) => {
 };
 
 const seekTo = (seconds) => {
-  const fallbackDuration = Math.max(...annotations.map((item) => item.timestamp), 1);
-  const duration = Number.isFinite(video.duration) ? video.duration : fallbackDuration;
-  const target = clamp(toSeconds(seconds), 0, duration || fallbackDuration);
+  const duration = mediaDuration();
+  const target = clamp(toSeconds(seconds), 0, duration);
 
   if (video.readyState < 1) {
     video.addEventListener("loadedmetadata", () => seekTo(target), { once: true });
     return;
   }
 
-  if (typeof video.fastSeek === "function") {
-    video.fastSeek(target);
-  } else {
-    video.currentTime = target;
-  }
+  video.currentTime = target;
   render();
 };
 
 const renderTimeline = () => {
-  const duration = video.duration || Math.max(...annotations.map((item) => item.timestamp), 1);
+  const duration = mediaDuration();
   timeline.innerHTML = annotations.map((item) => {
     const left = Math.min(100, Math.max(0, (item.timestamp / duration) * 100));
     return `
@@ -169,23 +175,41 @@ video.addEventListener("loadedmetadata", () => {
 timeline.addEventListener("click", (event) => {
   const marker = event.target.closest("[data-time]");
   if (marker) {
+    event.preventDefault();
+    event.stopPropagation();
     seekTo(marker.dataset.time);
     return;
   }
 
   const rect = timeline.getBoundingClientRect();
   const ratio = clamp((event.clientX - rect.left) / rect.width, 0, 1);
-  const duration = video.duration || Math.max(...annotations.map((item) => item.timestamp), 1);
-  seekTo(ratio * duration);
+  seekTo(ratio * mediaDuration());
 });
 
 annotationList.addEventListener("click", (event) => {
   const card = event.target.closest("[data-time]");
   if (!card) return;
+  event.preventDefault();
   seekTo(card.dataset.time);
 });
 
 annotationList.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const card = event.target.closest("[data-time]");
+  if (!card) return;
+  event.preventDefault();
+  seekTo(card.dataset.time);
+});
+
+overlay.addEventListener("click", (event) => {
+  const card = event.target.closest("[data-time]");
+  if (!card) return;
+  event.preventDefault();
+  event.stopPropagation();
+  seekTo(card.dataset.time);
+});
+
+overlay.addEventListener("keydown", (event) => {
   if (event.key !== "Enter" && event.key !== " ") return;
   const card = event.target.closest("[data-time]");
   if (!card) return;

@@ -111,10 +111,12 @@ The JSON output includes `request_budget`, `sampling_strategy`,
 
 ## Annotation Viewer
 
-Start a local static server:
+Start the range-enabled local static server. The range support matters because
+browser video seeking can fail or jump back to the beginning without it.
 
 ```bash
-python -m http.server 8000
+./.conda/bin/python scripts/range_server.py --port 8000 > /tmp/prism-gui.log 2>&1 &
+echo $! > /tmp/prism-gui.pid
 ```
 
 Open:
@@ -125,6 +127,13 @@ http://127.0.0.1:8000/gui/
 
 Use the file controls in the viewer to load your video and the generated
 `*.annotations.json` file.
+
+Stop the server when done:
+
+```bash
+kill "$(cat /tmp/prism-gui.pid)"
+rm /tmp/prism-gui.pid
+```
 
 ## Tests
 
