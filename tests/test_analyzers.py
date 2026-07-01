@@ -557,6 +557,111 @@ class TestCLI(unittest.TestCase):
             parser.parse_args(["--help"])
         self.assertEqual(cm.exception.code, 0)
 
+    def test_lab_review_cost_prompt_no_stops_before_client(self):
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+            video_path = f.name
+
+        try:
+            from main import main
+
+            estimate = {
+                "model": "claude-opus-4-5",
+                "pricing": {"input": 5.0, "output": 25.0},
+                "video": {"width": 1280, "height": 720, "duration_sec": 60},
+                "resized_frame": {
+                    "width": 1024,
+                    "height": 576,
+                    "visual_tokens": 777,
+                },
+                "max_uploaded_frames": 10,
+                "max_claude_requests": 3,
+                "image_input_tokens": 7770,
+                "output_token_ceiling": 10240,
+                "image_input_cost_usd": 0.03885,
+                "output_cost_ceiling_usd": 0.256,
+                "estimated_ceiling_usd": 0.29485,
+                "notes": "test",
+            }
+
+            with (
+                patch("main.estimate_lab_review_cost", return_value=estimate),
+                patch("builtins.input", return_value="n"),
+                patch("src.vlm_client.VLMClient") as mock_client,
+            ):
+                ret = main(["--video", video_path])
+
+            self.assertEqual(ret, 1)
+            mock_client.assert_not_called()
+        finally:
+            Path(video_path).unlink(missing_ok=True)
+
+    def test_lab_review_cost_prompt_yes_runs_task(self):
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+            video_path = f.name
+
+        try:
+            from main import main
+
+            estimate = {
+                "model": "claude-opus-4-5",
+                "pricing": {"input": 5.0, "output": 25.0},
+                "video": {"width": 1280, "height": 720, "duration_sec": 60},
+                "resized_frame": {
+                    "width": 1024,
+                    "height": 576,
+                    "visual_tokens": 777,
+                },
+                "max_uploaded_frames": 10,
+                "max_claude_requests": 3,
+                "image_input_tokens": 7770,
+                "output_token_ceiling": 10240,
+                "image_input_cost_usd": 0.03885,
+                "output_cost_ceiling_usd": 0.256,
+                "estimated_ceiling_usd": 0.29485,
+                "notes": "test",
+            }
+
+            with (
+                patch("main.estimate_lab_review_cost", return_value=estimate),
+                patch("builtins.input", return_value="y"),
+                patch("src.vlm_client.VLMClient", return_value=MagicMock()),
+                patch("main.run_task", return_value={"task": "lab_review"}) as mock_run_task,
+            ):
+                ret = main(["--video", video_path])
+
+            self.assertEqual(ret, 0)
+            mock_run_task.assert_called_once()
+        finally:
+            Path(video_path).unlink(missing_ok=True)
+
+    def test_cost_estimator_handles_portrait_video(self):
+        from main import estimate_lab_review_cost
+
+        with patch(
+            "src.video_processor.get_video_metadata",
+            return_value={
+                "fps": 30,
+                "total_frames": 1800,
+                "duration_sec": 60,
+                "width": 1080,
+                "height": 1920,
+            },
+        ):
+            cost = estimate_lab_review_cost(
+                "portrait.mp4",
+                "claude-opus-4-5",
+                {"max_sampled_frames": 70},
+            )
+
+        self.assertEqual(cost["resized_frame"]["width"], 1024)
+        self.assertGreater(cost["resized_frame"]["height"], 1700)
+        self.assertEqual(cost["max_uploaded_frames"], 50)
+        self.assertGreater(cost["estimated_ceiling_usd"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -67,6 +67,15 @@ python main.py \
   --max-sampled-frames 70
 ```
 
+Before any Claude request is made, the CLI prints a cost estimate and asks:
+
+```text
+Continue and run Claude analysis? Type y to continue:
+```
+
+Only `y` or `yes` continues. Any other answer aborts before the Claude client is
+created and before frames are uploaded.
+
 Tune the sparse sampling strategy:
 
 ```bash
@@ -87,6 +96,10 @@ Budget notes:
 - `--max-claude-requests` is a hard cap on Claude API calls made by
   `lab_review`, including the first pass and final synthesis.
 - `--max-sampled-frames` is a hard cap on uploaded video frames.
+- The preflight estimate uses local video dimensions, the configured request
+  caps, Claude visual-token accounting, and known API list prices.
+- The estimate includes image input tokens and configured output-token ceilings.
+  Text prompt input, taxes, and provider-side price changes are not included.
 - To allow any focused before/after window, use at least `3` requests: first
   pass, one detail pass, final synthesis.
 - Cost still depends on model pricing, image size, and output length, so use
