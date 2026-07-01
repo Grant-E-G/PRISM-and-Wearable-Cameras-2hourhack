@@ -200,6 +200,14 @@ def _patch_get_metadata(duration=60.0):
     )
 
 
+def _patch_lab_review_metadata(duration=120.0):
+    return patch(
+        "src.analyzers.lab_review_analyzer.get_video_metadata",
+        return_value={"fps": 30, "total_frames": int(duration * 30),
+                      "duration_sec": duration, "width": 1280, "height": 720},
+    )
+
+
 class TestWellPlateAnalyzer(unittest.TestCase):
     def test_analyze_returns_well_count(self):
         from src.analyzers.well_plate_analyzer import WellPlateAnalyzer
@@ -344,6 +352,121 @@ class TestYeastTransformationAnalyzer(unittest.TestCase):
         self.assertEqual(result["reproducibility_risks"], [])
         self.assertEqual(result["thumbs_up"], [])
         self.assertIn("Could not parse", result["protocol"]["uncertainties"][0])
+
+
+class TestLabReviewAnalyzer(unittest.TestCase):
+    def test_budgeted_review_uses_requested_detail_window(self):
+        from src.analyzers.lab_review_analyzer import LabReviewAnalyzer
+
+        first_pass = {
+            "video_summary": "A transfer appears to happen around 30 seconds.",
+            "event_timeline": [
+                {
+                    "timestamp_sec": 30,
+                    "event": "Scientist handles a tube.",
+                    "evidence": "Tube and rack visible.",
+                    "confidence": "medium",
+                }
+            ],
+            "focus_requests": [
+                {
+                    "start_sec": 24,
+                    "end_sec": 36,
+                    "reason": "Need before/after shots for the transfer.",
+                    "priority": "high",
+                }
+            ],
+            "low_information_ranges": [],
+            "notes": "",
+        }
+        detail = {
+            "observed_actions": [
+                {
+                    "timestamp_sec": 30,
+                    "action": "Transfer liquid into a tube",
+                    "materials": ["tube", "pipette"],
+                    "measurement": None,
+                    "confidence": "medium",
+                }
+            ],
+            "reproducibility_risks": [
+                {
+                    "timestamp_sec": 30,
+                    "action": "Transfer liquid",
+                    "issue": "Volume is not visible.",
+                    "severity": "High",
+                    "suggested_fix": "Record transfer volume.",
+                    "confidence": "medium",
+                }
+            ],
+            "thumbs_up": [],
+            "focus_requests": [],
+            "notes": "",
+        }
+        final = {
+            "review_summary": "The video shows a tube transfer around 30 seconds.",
+            "event_timeline": first_pass["event_timeline"],
+            "observed_actions": detail["observed_actions"],
+            "reproducibility_risks": detail["reproducibility_risks"],
+            "thumbs_up": [],
+            "reproducibility_metrics": [
+                {
+                    "metric": "critical-parameters",
+                    "score": 2,
+                    "evidence": "Transfer volume is not visible.",
+                    "recommendation": "Capture labels and volumes.",
+                }
+            ],
+            "protocol": {
+                "title": "Lab Video Review",
+                "materials": ["tube", "pipette"],
+                "steps": ["Transfer liquid into a tube."],
+                "uncertainties": ["Transfer volume is missing."],
+            },
+            "notes": "",
+        }
+
+        vlm = MagicMock()
+        vlm.provider = "claude"
+        vlm.analyze_frames.side_effect = [
+            json.dumps(first_pass),
+            json.dumps(detail),
+            json.dumps(final),
+        ]
+
+        with (
+            _patch_lab_review_metadata(120.0),
+            patch(
+                "src.analyzers.lab_review_analyzer.extract_frames",
+                return_value=[SAMPLE_FRAME],
+            ),
+            patch(
+                "src.analyzers.lab_review_analyzer.extract_frames_at_timestamps",
+                return_value=[{**SAMPLE_FRAME, "timestamp_sec": 24.0}],
+            ),
+        ):
+            result = LabReviewAnalyzer(vlm).analyze(
+                "fake.mp4",
+                max_claude_requests=3,
+                max_sampled_frames=5,
+            )
+
+        self.assertEqual(result["task"], "lab_review")
+        self.assertEqual(result["request_budget"]["used_claude_requests"], 3)
+        self.assertEqual(vlm.analyze_frames.call_count, 3)
+        self.assertEqual(result["observed_actions"][0]["action"],
+                         "Transfer liquid into a tube")
+        self.assertEqual(result["reproducibility_risks"][0]["severity"], "High")
+        self.assertEqual(result["reproducibility_metrics"][0]["score"], 2)
+
+    def test_claude_only_enforced(self):
+        from src.analyzers.lab_review_analyzer import LabReviewAnalyzer
+
+        vlm = MagicMock()
+        vlm.provider = "ollama"
+
+        with self.assertRaises(ValueError):
+            LabReviewAnalyzer(vlm).analyze("fake.mp4")
 
 
 class TestVolumeAnalyzer(unittest.TestCase):

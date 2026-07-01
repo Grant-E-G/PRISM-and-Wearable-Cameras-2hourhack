@@ -1,27 +1,12 @@
-"""PRISM Lab Video Analyzer – CLI entry point.
+"""Lab Video Review CLI entry point.
 
 Usage examples
 --------------
-# Analyze Video A (well plate counting) with Claude:
-python main.py --video path/to/video_a.mp4 --task well_plate
+# Budgeted Claude review with sparse first pass and requested detail windows:
+python main.py --video path/to/video.mp4 --task lab_review --max-claude-requests 6
 
-# Analyze Video B (color changes) with Gemini:
-python main.py --video path/to/video_b.mp4 --task color_change --provider gemini
-
-# Analyze Video C (OD values):
-python main.py --video path/to/video_c.mp4 --task od_values
-
-# Analyze Video C locally with Ollama / Qwen2.5-VL:
-python main.py --video path/to/video_c.mp4 --task yeast_protocol --provider ollama
-
-# Analyze Video D (liquid volume):
-python main.py --video path/to/video_d.mp4 --task volume
-
-# Stretch goal – write a full protocol:
-python main.py --video path/to/video.mp4 --task protocol
-
-# Run all tasks and write a protocol:
-python main.py --video path/to/video.mp4 --task all
+# Write viewer-compatible annotations:
+python main.py --video path/to/video.mp4 --output review.annotations.json
 """
 
 import argparse
@@ -41,8 +26,9 @@ load_dotenv()
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="PRISM Lab Video Analyzer – extract protocol information "
-                    "from lab videos using VLM (Claude / Gemini).",
+        description=(
+            "Budgeted lab video review using Claude-only sparse frame sampling."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -54,8 +40,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--task",
-        required=True,
+        default="lab_review",
         choices=[
+            "lab_review",
             "well_plate",
             "color_change",
             "od_values",
@@ -66,6 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
         ],
         help=(
             "Analysis task to run:\n"
+            "  lab_review   – budgeted sparse Claude review for lab videos\n"
             "  well_plate   – Video A: count wells pipetted in 96-well plate\n"
             "  color_change – Video B: detect color changes over time\n"
             "  od_values    – Video C: read OD values from display\n"
@@ -77,9 +65,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--provider",
-        choices=["claude", "gemini", "ollama"],
+        choices=["claude"],
         default="claude",
-        help="VLM provider to use (default: claude).",
+        help="VLM provider to use. This migrated workflow is Claude-only.",
     )
     parser.add_argument(
         "--model",
@@ -97,14 +85,66 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         metavar="SECONDS",
-        help="Override the frame sampling interval (seconds).",
+        help="Override legacy task interval or lab_review coarse interval.",
     )
     parser.add_argument(
         "--max-frames",
         type=int,
         default=None,
         metavar="N",
-        help="Override the maximum number of frames sent to the VLM.",
+        help="Override legacy max frames or lab_review coarse frame cap.",
+    )
+    parser.add_argument(
+        "--coarse-interval",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="lab_review first-pass sampling interval (default: 30).",
+    )
+    parser.add_argument(
+        "--coarse-max-frames",
+        type=int,
+        default=None,
+        metavar="N",
+        help="lab_review first-pass frame cap (default: 18).",
+    )
+    parser.add_argument(
+        "--detail-interval",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="lab_review frame interval inside Claude-requested windows.",
+    )
+    parser.add_argument(
+        "--frames-per-focus",
+        type=int,
+        default=None,
+        metavar="N",
+        help="lab_review frame cap per requested detail window.",
+    )
+    parser.add_argument(
+        "--max-focus-windows",
+        type=int,
+        default=None,
+        metavar="N",
+        help="lab_review maximum number of detail windows to inspect.",
+    )
+    parser.add_argument(
+        "--max-claude-requests",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Hard cap on Claude requests for lab_review, including first pass "
+            "and final synthesis (default: 6)."
+        ),
+    )
+    parser.add_argument(
+        "--max-sampled-frames",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Hard cap on total video frames uploaded to Claude for lab_review.",
     )
     return parser
 
@@ -117,8 +157,10 @@ def run_task(task: str, vlm_client, video_path: str, extra_kwargs: dict) -> dict
     from src.analyzers.yeast_transformation_analyzer import YeastTransformationAnalyzer
     from src.analyzers.volume_analyzer import VolumeAnalyzer
     from src.analyzers.protocol_writer import ProtocolWriter
+    from src.analyzers.lab_review_analyzer import LabReviewAnalyzer
 
     analyzers = {
+        "lab_review": LabReviewAnalyzer,
         "well_plate": WellPlateAnalyzer,
         "color_change": ColorChangeAnalyzer,
         "od_values": ODValueAnalyzer,
@@ -126,7 +168,8 @@ def run_task(task: str, vlm_client, video_path: str, extra_kwargs: dict) -> dict
         "volume": VolumeAnalyzer,
     }
     challenge_analyzers = {
-        name: cls for name, cls in analyzers.items() if name != "yeast_protocol"
+        name: analyzers[name]
+        for name in ("well_plate", "color_change", "od_values", "volume")
     }
 
     if task == "protocol":
@@ -166,9 +209,28 @@ def main(argv: list[str] | None = None) -> int:
 
     # Build optional kwargs
     extra: dict = {}
-    if args.interval is not None:
+    if args.task == "lab_review":
+        if args.interval is not None:
+            extra["coarse_interval_seconds"] = args.interval
+        if args.max_frames is not None:
+            extra["coarse_max_frames"] = args.max_frames
+        if args.coarse_interval is not None:
+            extra["coarse_interval_seconds"] = args.coarse_interval
+        if args.coarse_max_frames is not None:
+            extra["coarse_max_frames"] = args.coarse_max_frames
+        if args.detail_interval is not None:
+            extra["detail_interval_seconds"] = args.detail_interval
+        if args.frames_per_focus is not None:
+            extra["frames_per_focus"] = args.frames_per_focus
+        if args.max_focus_windows is not None:
+            extra["max_focus_windows"] = args.max_focus_windows
+        if args.max_claude_requests is not None:
+            extra["max_claude_requests"] = args.max_claude_requests
+        if args.max_sampled_frames is not None:
+            extra["max_sampled_frames"] = args.max_sampled_frames
+    elif args.interval is not None:
         extra["interval_seconds"] = args.interval
-    if args.max_frames is not None:
+    if args.task != "lab_review" and args.max_frames is not None:
         extra["max_frames"] = args.max_frames
 
     print(
