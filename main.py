@@ -219,6 +219,21 @@ def build_parser() -> argparse.ArgumentParser:
             "this amount."
         ),
     )
+    parser.add_argument(
+        "--checkpoint",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Write lab_review checkpoint state here after each successful "
+            "Claude response."
+        ),
+    )
+    parser.add_argument(
+        "--resume-checkpoint",
+        default=None,
+        metavar="PATH",
+        help="Resume lab_review from a prior checkpoint file.",
+    )
     return parser
 
 
@@ -424,6 +439,13 @@ def main(argv: list[str] | None = None) -> int:
             extra["max_sampled_frames"] = args.max_sampled_frames
         if args.max_estimated_cost is not None:
             extra["max_estimated_cost_usd"] = args.max_estimated_cost
+        checkpoint_path = args.checkpoint
+        if checkpoint_path is None and args.output:
+            checkpoint_path = f"{args.output}.checkpoint.json"
+        if checkpoint_path:
+            extra["checkpoint_path"] = checkpoint_path
+        if args.resume_checkpoint:
+            extra["resume_checkpoint"] = args.resume_checkpoint
     elif args.interval is not None:
         extra["interval_seconds"] = args.interval
     if args.task != "lab_review" and args.max_frames is not None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from src.analyzers.base_analyzer import BaseAnalyzer
@@ -220,6 +221,8 @@ class LabReviewAnalyzer(BaseAnalyzer):
         max_focus_windows: int = 6,
         max_claude_requests: int = 6,
         max_sampled_frames: int = 70,
+        checkpoint_path: str | None = None,
+        resume_checkpoint: str | None = None,
         **kwargs: Any,
     ) -> dict:
         """Run a sparse, budgeted Claude review and return viewer annotations."""
@@ -231,29 +234,123 @@ class LabReviewAnalyzer(BaseAnalyzer):
 
         budget = RequestBudget(maximum=max_claude_requests)
         metadata = get_video_set_metadata(video_path)
+        sampling_strategy = {
+            "coarse_interval_seconds": coarse_interval_seconds,
+            "coarse_max_frames": coarse_max_frames,
+            "detail_interval_seconds": detail_interval_seconds,
+            "frames_per_focus": frames_per_focus,
+            "max_focus_windows": max_focus_windows,
+            "max_sampled_frames": max_sampled_frames,
+            "video_source_type": "folder"
+            if metadata.get("is_video_set")
+            else "file",
+        }
 
-        coarse_limit = min(coarse_max_frames, max_sampled_frames)
-        coarse_frames = extract_frames_from_video_set(
-            video_path,
-            interval_seconds=coarse_interval_seconds,
-            max_frames=coarse_limit,
-        )
-        budget.spend()
-        first_raw = self.vlm.analyze_frames(
-            coarse_frames,
-            FIRST_PASS_PROMPT,
-            max_tokens=3072,
-        )
-        first_pass = _parse_json_response(first_raw, default=_default_first_pass(first_raw))
+        checkpoint = _load_checkpoint(resume_checkpoint) if resume_checkpoint else {}
+        if checkpoint:
+            metadata = checkpoint.get("metadata") or metadata
+            first_pass = checkpoint.get("first_pass") or _default_first_pass("")
+            detail_passes = checkpoint.get("detail_passes") or []
+            focus_queue = checkpoint.get("focus_queue") or []
+            sampled_frames = int(checkpoint.get("sampled_frames") or 0)
+            budget.used = int((checkpoint.get("request_budget") or {}).get("used_claude_requests") or 0)
+            seen_windows = {
+                tuple(item)
+                for item in checkpoint.get("seen_windows", [])
+                if isinstance(item, (list, tuple)) and len(item) == 2
+            }
+            sampling_strategy.update(checkpoint.get("sampling_strategy") or {})
+        else:
+            first_pass = {}
+            detail_passes: list[dict] = []
+            focus_queue = []
+            sampled_frames = 0
+            seen_windows: set[tuple[float, float]] = set()
 
-        sampled_frames = len(coarse_frames)
-        focus_queue = _normalize_focus_requests(
-            first_pass.get("focus_requests", []),
-            duration_sec=metadata.get("duration_sec", 0),
-        )
-
-        detail_passes: list[dict] = []
-        seen_windows: set[tuple[float, float]] = set()
+        if not first_pass:
+            coarse_limit = min(coarse_max_frames, max_sampled_frames)
+            coarse_frames = extract_frames_from_video_set(
+                video_path,
+                interval_seconds=coarse_interval_seconds,
+                max_frames=coarse_limit,
+            )
+            budget.spend()
+            try:
+                first_raw = self.vlm.analyze_frames(
+                    coarse_frames,
+                    FIRST_PASS_PROMPT,
+                    max_tokens=3072,
+                )
+            except Exception as exc:
+                first_pass = _default_first_pass("")
+                _write_checkpoint(
+                    checkpoint_path,
+                    _checkpoint_state(
+                        video_path,
+                        metadata,
+                        first_pass,
+                        detail_passes,
+                        [],
+                        seen_windows,
+                        len(coarse_frames),
+                        budget,
+                        {
+                            **sampling_strategy,
+                            "coarse_sampled_timestamps_sec": [
+                                frame["timestamp_sec"] for frame in coarse_frames
+                            ],
+                        },
+                        "failed",
+                        error=_error_message("coarse_pass", exc),
+                    ),
+                )
+                return _build_result(
+                    video_path=video_path,
+                    metadata=metadata,
+                    first_pass=first_pass,
+                    detail_passes=detail_passes,
+                    final={},
+                    final_raw="",
+                    budget=budget,
+                    sampled_frames=len(coarse_frames),
+                    sampling_strategy={
+                        **sampling_strategy,
+                        "coarse_sampled_timestamps_sec": [
+                            frame["timestamp_sec"] for frame in coarse_frames
+                        ],
+                    },
+                    unfilled_focus_requests=[],
+                    analysis_status="failed",
+                    error=_error_message("coarse_pass", exc),
+                    checkpoint_path=checkpoint_path,
+                )
+            first_pass = _parse_json_response(
+                first_raw,
+                default=_default_first_pass(first_raw),
+            )
+            sampled_frames = len(coarse_frames)
+            focus_queue = _normalize_focus_requests(
+                first_pass.get("focus_requests", []),
+                duration_sec=metadata.get("duration_sec", 0),
+            )
+            sampling_strategy["coarse_sampled_timestamps_sec"] = [
+                frame["timestamp_sec"] for frame in coarse_frames
+            ]
+            _write_checkpoint(
+                checkpoint_path,
+                _checkpoint_state(
+                    video_path,
+                    metadata,
+                    first_pass,
+                    detail_passes,
+                    focus_queue,
+                    seen_windows,
+                    sampled_frames,
+                    budget,
+                    sampling_strategy,
+                    "coarse_complete",
+                ),
+            )
 
         while (
             focus_queue
@@ -284,13 +381,47 @@ class LabReviewAnalyzer(BaseAnalyzer):
 
             sampled_frames += len(frames)
             budget.spend()
-            detail_raw = self.vlm.analyze_frames(
-                frames,
-                DETAIL_PASS_PROMPT.replace(
-                    "{window_json}", json.dumps(window, indent=2, sort_keys=True)
-                ),
-                max_tokens=3072,
-            )
+            try:
+                detail_raw = self.vlm.analyze_frames(
+                    frames,
+                    DETAIL_PASS_PROMPT.replace(
+                        "{window_json}", json.dumps(window, indent=2, sort_keys=True)
+                    ),
+                    max_tokens=3072,
+                )
+            except Exception as exc:
+                unfilled = [window, *focus_queue]
+                _write_checkpoint(
+                    checkpoint_path,
+                    _checkpoint_state(
+                        video_path,
+                        metadata,
+                        first_pass,
+                        detail_passes,
+                        unfilled,
+                        seen_windows,
+                        sampled_frames,
+                        budget,
+                        sampling_strategy,
+                        "failed",
+                        error=_error_message("detail_pass", exc),
+                    ),
+                )
+                return _build_result(
+                    video_path=video_path,
+                    metadata=metadata,
+                    first_pass=first_pass,
+                    detail_passes=detail_passes,
+                    final={},
+                    final_raw="",
+                    budget=budget,
+                    sampled_frames=sampled_frames,
+                    sampling_strategy=sampling_strategy,
+                    unfilled_focus_requests=unfilled,
+                    analysis_status="failed",
+                    error=_error_message("detail_pass", exc),
+                    checkpoint_path=checkpoint_path,
+                )
             detail_data = _parse_json_response(
                 detail_raw,
                 default=_default_detail_pass(detail_raw),
@@ -310,6 +441,21 @@ class LabReviewAnalyzer(BaseAnalyzer):
                     duration_sec=metadata.get("duration_sec", 0),
                 )
                 focus_queue.extend(followups)
+            _write_checkpoint(
+                checkpoint_path,
+                _checkpoint_state(
+                    video_path,
+                    metadata,
+                    first_pass,
+                    detail_passes,
+                    focus_queue,
+                    seen_windows,
+                    sampled_frames,
+                    budget,
+                    sampling_strategy,
+                    "detail_complete",
+                ),
+            )
 
         synthesis_input = {
             "video_metadata": metadata,
@@ -327,24 +473,57 @@ class LabReviewAnalyzer(BaseAnalyzer):
         final_raw = ""
         if budget.remaining > 0:
             budget.spend()
-            final_raw = self.vlm.analyze_frames(
-                [],
-                FINAL_SYNTHESIS_PROMPT.replace(
-                    "{analysis_json}",
-                    json.dumps(
-                        synthesis_input,
-                        indent=2,
-                        ensure_ascii=False,
-                        sort_keys=True,
-                    )
-                ),
-                max_tokens=4096,
-            )
+            try:
+                final_raw = self.vlm.analyze_frames(
+                    [],
+                    FINAL_SYNTHESIS_PROMPT.replace(
+                        "{analysis_json}",
+                        json.dumps(
+                            synthesis_input,
+                            indent=2,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        )
+                    ),
+                    max_tokens=4096,
+                )
+            except Exception as exc:
+                _write_checkpoint(
+                    checkpoint_path,
+                    _checkpoint_state(
+                        video_path,
+                        metadata,
+                        first_pass,
+                        detail_passes,
+                        focus_queue,
+                        seen_windows,
+                        sampled_frames,
+                        budget,
+                        sampling_strategy,
+                        "failed",
+                        error=_error_message("final_synthesis", exc),
+                    ),
+                )
+                return _build_result(
+                    video_path=video_path,
+                    metadata=metadata,
+                    first_pass=first_pass,
+                    detail_passes=detail_passes,
+                    final={},
+                    final_raw="",
+                    budget=budget,
+                    sampled_frames=sampled_frames,
+                    sampling_strategy=sampling_strategy,
+                    unfilled_focus_requests=focus_queue,
+                    analysis_status="partial",
+                    error=_error_message("final_synthesis", exc),
+                    checkpoint_path=checkpoint_path,
+                )
             final = _parse_json_response(final_raw, default={})
         else:
             final = {}
 
-        return _build_result(
+        result = _build_result(
             video_path=video_path,
             metadata=metadata,
             first_pass=first_pass,
@@ -353,22 +532,30 @@ class LabReviewAnalyzer(BaseAnalyzer):
             final_raw=final_raw,
             budget=budget,
             sampled_frames=sampled_frames,
-            sampling_strategy={
-                "coarse_interval_seconds": coarse_interval_seconds,
-                "coarse_max_frames": coarse_max_frames,
-                "detail_interval_seconds": detail_interval_seconds,
-                "frames_per_focus": frames_per_focus,
-                "max_focus_windows": max_focus_windows,
-                "max_sampled_frames": max_sampled_frames,
-                "coarse_sampled_timestamps_sec": [
-                    frame["timestamp_sec"] for frame in coarse_frames
-                ],
-                "video_source_type": "folder"
-                if metadata.get("is_video_set")
-                else "file",
-            },
+            sampling_strategy=sampling_strategy,
             unfilled_focus_requests=focus_queue,
+            analysis_status="complete",
+            checkpoint_path=checkpoint_path,
         )
+        _write_checkpoint(
+            checkpoint_path,
+            {
+                **_checkpoint_state(
+                    video_path,
+                    metadata,
+                    first_pass,
+                    detail_passes,
+                    focus_queue,
+                    seen_windows,
+                    sampled_frames,
+                    budget,
+                    sampling_strategy,
+                    "complete",
+                ),
+                "final": final,
+            },
+        )
+        return result
 
 
 def _require_claude(vlm: Any) -> None:
@@ -409,6 +596,62 @@ def _default_detail_pass(raw: str) -> dict:
         "focus_requests": [],
         "notes": raw,
     }
+
+
+def _load_checkpoint(path: str | None) -> dict:
+    if not path:
+        return {}
+    checkpoint_path = Path(path)
+    if not checkpoint_path.exists():
+        return {}
+    try:
+        return json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+
+
+def _write_checkpoint(path: str | None, state: dict) -> None:
+    if not path:
+        return
+    checkpoint_path = Path(path)
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint_path.write_text(
+        json.dumps(state, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def _checkpoint_state(
+    video_path: str,
+    metadata: dict,
+    first_pass: dict,
+    detail_passes: list[dict],
+    focus_queue: list[dict],
+    seen_windows: set[tuple[float, float]],
+    sampled_frames: int,
+    budget: RequestBudget,
+    sampling_strategy: dict,
+    status: str,
+    error: str | None = None,
+) -> dict:
+    return {
+        "type": "lab_review_checkpoint",
+        "status": status,
+        "video_path": video_path,
+        "metadata": metadata,
+        "first_pass": first_pass,
+        "detail_passes": detail_passes,
+        "focus_queue": focus_queue,
+        "seen_windows": [list(item) for item in sorted(seen_windows)],
+        "sampled_frames": sampled_frames,
+        "request_budget": budget.as_dict(),
+        "sampling_strategy": sampling_strategy,
+        "error": error,
+    }
+
+
+def _error_message(stage: str, exc: Exception) -> str:
+    return f"{stage}: {type(exc).__name__}: {exc}"
 
 
 def _normalize_focus_requests(items: Any, duration_sec: float) -> list[dict]:
@@ -482,6 +725,9 @@ def _build_result(
     sampled_frames: int,
     sampling_strategy: dict,
     unfilled_focus_requests: list[dict],
+    analysis_status: str = "complete",
+    error: str | None = None,
+    checkpoint_path: str | None = None,
 ) -> dict:
     merged_actions = _merge_detail_items(detail_passes, "observed_actions")
     merged_risks = _merge_detail_items(detail_passes, "reproducibility_risks")
@@ -490,6 +736,9 @@ def _build_result(
     protocol = final.get("protocol") or {}
     return {
         "task": "lab_review",
+        "analysis_status": analysis_status,
+        "error": error,
+        "checkpoint_path": checkpoint_path,
         "video_path": video_path,
         "video_metadata": metadata,
         "review_summary": final.get("review_summary")

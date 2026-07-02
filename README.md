@@ -78,6 +78,26 @@ processed in filename sort order as one virtual timeline, so names like
   --preset guided_3usd
 ```
 
+This also writes a checkpoint by default:
+
+```text
+downloads/lab-session.annotations.json.checkpoint.json
+```
+
+If Claude fails partway through, the command writes a partial annotations JSON
+with `analysis_status: "failed"` or `"partial"` plus the checkpoint path. Resume
+later with:
+
+```bash
+./.conda/bin/python main.py \
+  --video recordings/ \
+  --output downloads/lab-session.annotations.json \
+  --preset guided_3usd \
+  --resume-checkpoint downloads/lab-session.annotations.json.checkpoint.json
+```
+
+You can choose a specific checkpoint path with `--checkpoint`.
+
 The `guided_3usd` preset is intended for longer, mostly unedited recordings
 where the coarse scan should stay sparse but Claude should spend most of the
 budget on guided follow-up windows. It uses:

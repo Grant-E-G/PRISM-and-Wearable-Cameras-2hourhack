@@ -520,6 +520,62 @@ class TestLabReviewAnalyzer(unittest.TestCase):
         with self.assertRaises(ValueError):
             LabReviewAnalyzer(vlm).analyze("fake.mp4")
 
+    def test_failed_detail_pass_returns_partial_and_writes_checkpoint(self):
+        import tempfile
+        from src.analyzers.lab_review_analyzer import LabReviewAnalyzer
+
+        first_pass = {
+            "video_summary": "A transfer appears to happen.",
+            "event_timeline": [],
+            "focus_requests": [
+                {
+                    "start_sec": 24,
+                    "end_sec": 36,
+                    "reason": "Need before/after transfer context.",
+                    "priority": "high",
+                }
+            ],
+            "low_information_ranges": [],
+            "notes": "",
+        }
+
+        vlm = MagicMock()
+        vlm.provider = "claude"
+        vlm.analyze_frames.side_effect = [
+            json.dumps(first_pass),
+            RuntimeError("credit balance too low"),
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "partial.checkpoint.json"
+            with (
+                _patch_lab_review_metadata(120.0),
+                patch(
+                    "src.analyzers.lab_review_analyzer.extract_frames_from_video_set",
+                    return_value=[SAMPLE_FRAME],
+                ),
+                patch(
+                    "src.analyzers.lab_review_analyzer.extract_frames_at_global_timestamps",
+                    return_value=[{**SAMPLE_FRAME, "timestamp_sec": 24.0}],
+                ),
+            ):
+                result = LabReviewAnalyzer(vlm).analyze(
+                    "fake.mp4",
+                    max_claude_requests=3,
+                    max_sampled_frames=5,
+                    checkpoint_path=str(checkpoint_path),
+                )
+
+            checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result["analysis_status"], "failed")
+        self.assertIn("credit balance too low", result["error"])
+        self.assertEqual(result["review_summary"], "A transfer appears to happen.")
+        self.assertEqual(checkpoint["status"], "failed")
+        self.assertEqual(checkpoint["first_pass"]["video_summary"],
+                         "A transfer appears to happen.")
+        self.assertEqual(checkpoint["request_budget"]["used_claude_requests"], 2)
+
 
 class TestVolumeAnalyzer(unittest.TestCase):
     def test_analyze_returns_volume(self):
