@@ -60,10 +60,21 @@ LAB_REVIEW_PRESETS = {
         "max_claude_requests": 5,
         "max_sampled_frames": 40,
     },
+    "guided_3usd": {
+        "coarse_interval_seconds": 60.0,
+        "coarse_max_frames": 42,
+        "detail_interval_seconds": 4.0,
+        "frames_per_focus": 12,
+        "max_focus_windows": 16,
+        "max_claude_requests": 18,
+        "max_sampled_frames": 240,
+        "max_estimated_cost_usd": 3.0,
+    },
 }
 FIRST_PASS_OUTPUT_TOKENS = 3072
 DETAIL_PASS_OUTPUT_TOKENS = 3072
 FINAL_SYNTHESIS_OUTPUT_TOKENS = 4096
+TEXT_INPUT_TOKENS_PER_REQUEST_CEILING = 1200
 DEFAULT_RESIZE_WIDTH = 1024
 
 
@@ -142,8 +153,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=sorted(LAB_REVIEW_PRESETS),
         default="default",
         help=(
-            "lab_review sampling preset. Use long_sparse for longer, mostly "
-            "unedited recordings."
+            "lab_review sampling preset. Use guided_3usd for denser guided "
+            "sampling under a $3 preflight cap."
         ),
     )
     parser.add_argument(
@@ -198,6 +209,16 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="Hard cap on total video frames uploaded to Claude for lab_review.",
     )
+    parser.add_argument(
+        "--max-estimated-cost",
+        type=float,
+        default=None,
+        metavar="USD",
+        help=(
+            "Abort before Claude if the preflight estimated ceiling exceeds "
+            "this amount."
+        ),
+    )
     return parser
 
 
@@ -223,13 +244,16 @@ def estimate_lab_review_cost(video_path: str, model: str | None, options: dict) 
     max_frames = _max_uploaded_frames(effective_options)
     max_requests = int(effective_options["max_claude_requests"])
     output_token_ceiling = _max_output_tokens(effective_options)
+    text_input_token_ceiling = _max_text_input_tokens(effective_options)
 
     image_input_tokens = visual_tokens_per_frame * max_frames
     image_input_cost = image_input_tokens / 1_000_000 * pricing["input"]
+    text_input_cost_ceiling = text_input_token_ceiling / 1_000_000 * pricing["input"]
     output_cost_ceiling = output_token_ceiling / 1_000_000 * pricing["output"]
 
     return {
         "model": model_name,
+        "budget_cap_usd": options.get("max_estimated_cost_usd"),
         "pricing": pricing,
         "video": {
             "width": metadata.get("width"),
@@ -245,13 +269,17 @@ def estimate_lab_review_cost(video_path: str, model: str | None, options: dict) 
         "max_uploaded_frames": max_frames,
         "max_claude_requests": max_requests,
         "image_input_tokens": image_input_tokens,
+        "text_input_token_ceiling": text_input_token_ceiling,
         "output_token_ceiling": output_token_ceiling,
         "image_input_cost_usd": image_input_cost,
+        "text_input_cost_ceiling_usd": text_input_cost_ceiling,
         "output_cost_ceiling_usd": output_cost_ceiling,
-        "estimated_ceiling_usd": image_input_cost + output_cost_ceiling,
+        "estimated_ceiling_usd": image_input_cost
+        + text_input_cost_ceiling
+        + output_cost_ceiling,
         "notes": (
-            "Estimate includes image input tokens and configured maximum output "
-            "tokens. Text prompt input, final synthesis text input, taxes, and "
+            "Estimate includes image input tokens, a conservative text input "
+            "ceiling, and configured maximum output tokens. Taxes and "
             "provider-side pricing changes are not included."
         ),
     }
@@ -302,10 +330,18 @@ def confirm_lab_review_cost(cost: dict) -> bool:
         file=sys.stderr,
     )
     print(
-        f"  Estimated ceiling before text input: "
+        "  Text input ceiling: "
+        f"{cost.get('text_input_token_ceiling', 0):,} tokens "
+        f"= ${cost.get('text_input_cost_ceiling_usd', 0):.4f}",
+        file=sys.stderr,
+    )
+    print(
+        f"  Estimated ceiling: "
         f"${cost['estimated_ceiling_usd']:.4f}",
         file=sys.stderr,
     )
+    if cost.get("budget_cap_usd") is not None:
+        print(f"  Budget cap: ${cost['budget_cap_usd']:.2f}", file=sys.stderr)
     print(f"  Note: {cost['notes']}", file=sys.stderr)
 
     try:
@@ -386,6 +422,8 @@ def main(argv: list[str] | None = None) -> int:
             extra["max_claude_requests"] = args.max_claude_requests
         if args.max_sampled_frames is not None:
             extra["max_sampled_frames"] = args.max_sampled_frames
+        if args.max_estimated_cost is not None:
+            extra["max_estimated_cost_usd"] = args.max_estimated_cost
     elif args.interval is not None:
         extra["interval_seconds"] = args.interval
     if args.task != "lab_review" and args.max_frames is not None:
@@ -393,6 +431,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.task == "lab_review":
         cost = estimate_lab_review_cost(video_path, args.model, extra)
+        budget_cap = cost.get("budget_cap_usd")
+        if budget_cap is not None and cost["estimated_ceiling_usd"] > budget_cap:
+            print(
+                "ERROR: estimated Claude cost ceiling "
+                f"${cost['estimated_ceiling_usd']:.4f} exceeds budget cap "
+                f"${budget_cap:.2f}. Lower sampling caps or raise the budget.",
+                file=sys.stderr,
+            )
+            return 1
         if not confirm_lab_review_cost(cost):
             print("Aborted before Claude analysis.", file=sys.stderr)
             return 1
@@ -483,6 +530,18 @@ def _max_output_tokens(options: dict) -> int:
         max(0, max_requests - 2),
     )
     return total + detail_requests * DETAIL_PASS_OUTPUT_TOKENS
+
+
+def _max_text_input_tokens(options: dict) -> int:
+    max_requests = int(options["max_claude_requests"])
+    detail_requests = min(
+        int(options["max_focus_windows"]),
+        max(0, max_requests - 2),
+    )
+    prior_output_inserted_into_final = FIRST_PASS_OUTPUT_TOKENS
+    prior_output_inserted_into_final += detail_requests * DETAIL_PASS_OUTPUT_TOKENS
+    prompt_overhead = max_requests * TEXT_INPUT_TOKENS_PER_REQUEST_CEILING
+    return prior_output_inserted_into_final + prompt_overhead
 
 
 if __name__ == "__main__":

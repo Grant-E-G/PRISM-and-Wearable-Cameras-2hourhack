@@ -75,25 +75,27 @@ processed in filename sort order as one virtual timeline, so names like
 ./.conda/bin/python main.py \
   --video recordings/ \
   --output downloads/lab-session.annotations.json \
-  --preset long_sparse
+  --preset guided_3usd
 ```
 
-The `long_sparse` preset is intended for longer, mostly unedited recordings. It
-uses:
+The `guided_3usd` preset is intended for longer, mostly unedited recordings
+where the coarse scan should stay sparse but Claude should spend most of the
+budget on guided follow-up windows. It uses:
 
 ```text
-coarse_interval_seconds = 90
-coarse_max_frames = 28
-detail_interval_seconds = 10
-frames_per_focus = 4
-max_focus_windows = 3
-max_claude_requests = 5
-max_sampled_frames = 40
+coarse_interval_seconds = 60
+coarse_max_frames = 42
+detail_interval_seconds = 4
+frames_per_focus = 12
+max_focus_windows = 16
+max_claude_requests = 18
+max_sampled_frames = 240
+max_estimated_cost_usd = 3
 ```
 
-For a 42 minute folder, that means about 28 coarse frames plus up to 12 focused
-detail frames before the final synthesis pass. That is intentionally much
-sparser than the one-minute test case.
+For a 42 minute folder, that means about 42 coarse frames plus up to 192 focused
+detail frames before the final synthesis pass. The preflight cost gate aborts
+before Claude if the estimated ceiling exceeds `$3.00`.
 
 Before any Claude request is made, the CLI prints a cost estimate and asks:
 
@@ -126,8 +128,9 @@ Budget notes:
 - `--max-sampled-frames` is a hard cap on uploaded video frames.
 - The preflight estimate uses local video dimensions, the configured request
   caps, Claude visual-token accounting, and known API list prices.
-- The estimate includes image input tokens and configured output-token ceilings.
-  Text prompt input, taxes, and provider-side price changes are not included.
+- The estimate includes image input tokens, a conservative text-input ceiling,
+  and configured output-token ceilings. Taxes and provider-side price changes
+  are not included.
 - To allow any focused before/after window, use at least `3` requests: first
   pass, one detail pass, final synthesis.
 - Cost still depends on model pricing, image size, and output length, so use
