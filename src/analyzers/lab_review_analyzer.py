@@ -52,6 +52,9 @@ Return only valid JSON in this shape:
 Keep focus_requests sparse. Prefer short windows around visible actions, setup
 changes, measurements, labeling, transfers, incubations, instrument displays,
 and any step where reproducibility would depend on tacit details.
+
+Budget context:
+{budget_json}
 """
 
 
@@ -61,9 +64,15 @@ You are reviewing a denser set of frames from one requested lab-video window.
 Window requested:
 {window_json}
 
+Budget context:
+{budget_json}
+
 Use only visible evidence. Extract concrete lab actions and reproducibility
 advice. If more context would change the review, request a small adjacent
-window, but do not request broad scanning.
+window, but do not request broad scanning. Do not request windows that overlap
+or mostly duplicate already-reviewed windows. If only one or two follow-up
+windows remain in the budget, request only the most reproducibility-critical
+moments.
 
 Return only valid JSON in this shape:
 {
@@ -123,33 +132,6 @@ Return only valid JSON in this shape:
       "confidence": "<high|medium|low>"
     }
   ],
-  "observed_actions": [
-    {
-      "timestamp_sec": <number>,
-      "action": "<short action>",
-      "materials": ["<material or equipment>", "..."],
-      "measurement": "<visible value or null>",
-      "confidence": "<high|medium|low>"
-    }
-  ],
-  "reproducibility_risks": [
-    {
-      "timestamp_sec": <number>,
-      "action": "<observed action or omission>",
-      "issue": "<why this could make the work hard to reproduce>",
-      "severity": "<Very High|High|Medium|Low>",
-      "suggested_fix": "<concrete correction or note to capture>",
-      "confidence": "<high|medium|low>"
-    }
-  ],
-  "thumbs_up": [
-    {
-      "timestamp_sec": <number>,
-      "practice": "<good practice observed>",
-      "why_it_helps": "<how this improves reproducibility>",
-      "confidence": "<high|medium|low>"
-    }
-  ],
   "reproducibility_metrics": [
     {
       "metric": "<critical-parameters|materials-identification|action-order|measurement-capture|timing-capture>",
@@ -173,6 +155,10 @@ Return only valid JSON in this shape:
   },
   "notes": "<important limitations>"
 }
+
+Keep this final response compact. Do not repeat every observed action/risk from
+the detail passes; those are already stored separately. Focus on summary,
+metrics, meta advice, protocol outline, and the most important timeline events.
 
 Analysis input:
 {analysis_json}
@@ -278,7 +264,22 @@ class LabReviewAnalyzer(BaseAnalyzer):
             try:
                 first_raw = self.vlm.analyze_frames(
                     coarse_frames,
-                    FIRST_PASS_PROMPT,
+                    FIRST_PASS_PROMPT.replace(
+                        "{budget_json}",
+                        json.dumps(
+                            _budget_context(
+                                budget=budget,
+                                sampled_frames=0,
+                                max_sampled_frames=max_sampled_frames,
+                                detail_passes=detail_passes,
+                                max_focus_windows=max_focus_windows,
+                                frames_per_focus=frames_per_focus,
+                                reviewed_windows=[],
+                            ),
+                            indent=2,
+                            sort_keys=True,
+                        ),
+                    ),
                     max_tokens=3072,
                 )
             except Exception as exc:
@@ -333,6 +334,11 @@ class LabReviewAnalyzer(BaseAnalyzer):
                 first_pass.get("focus_requests", []),
                 duration_sec=metadata.get("duration_sec", 0),
             )
+            focus_queue = _merge_focus_queue(
+                focus_queue,
+                seen_windows=seen_windows,
+                duration_sec=metadata.get("duration_sec", 0),
+            )
             sampling_strategy["coarse_sampled_timestamps_sec"] = [
                 frame["timestamp_sec"] for frame in coarse_frames
             ]
@@ -360,7 +366,7 @@ class LabReviewAnalyzer(BaseAnalyzer):
         ):
             window = focus_queue.pop(0)
             key = (round(window["start_sec"], 1), round(window["end_sec"], 1))
-            if key in seen_windows:
+            if key in seen_windows or _overlaps_seen_windows(window, seen_windows):
                 continue
             seen_windows.add(key)
 
@@ -386,6 +392,23 @@ class LabReviewAnalyzer(BaseAnalyzer):
                     frames,
                     DETAIL_PASS_PROMPT.replace(
                         "{window_json}", json.dumps(window, indent=2, sort_keys=True)
+                    ).replace(
+                        "{budget_json}",
+                        json.dumps(
+                            _budget_context(
+                                budget=budget,
+                                sampled_frames=sampled_frames,
+                                max_sampled_frames=max_sampled_frames,
+                                detail_passes=detail_passes,
+                                max_focus_windows=max_focus_windows,
+                                frames_per_focus=frames_per_focus,
+                                reviewed_windows=[
+                                    item["requested_window"] for item in detail_passes
+                                ],
+                            ),
+                            indent=2,
+                            sort_keys=True,
+                        ),
                     ),
                     max_tokens=3072,
                 )
@@ -440,7 +463,11 @@ class LabReviewAnalyzer(BaseAnalyzer):
                     detail_data.get("focus_requests", []),
                     duration_sec=metadata.get("duration_sec", 0),
                 )
-                focus_queue.extend(followups)
+                focus_queue = _merge_focus_queue(
+                    [*focus_queue, *followups],
+                    seen_windows=seen_windows,
+                    duration_sec=metadata.get("duration_sec", 0),
+                )
             _write_checkpoint(
                 checkpoint_path,
                 _checkpoint_state(
@@ -464,7 +491,7 @@ class LabReviewAnalyzer(BaseAnalyzer):
                 {
                     "requested_window": item["requested_window"],
                     "sampled_timestamps_sec": item["sampled_timestamps_sec"],
-                    "analysis": item["analysis"],
+                        "analysis": _compact_detail_analysis(item["analysis"]),
                 }
                 for item in detail_passes
             ],
@@ -523,6 +550,15 @@ class LabReviewAnalyzer(BaseAnalyzer):
         else:
             final = {}
 
+        final_truncated = bool(final_raw) and not _looks_like_complete_json_response(final_raw)
+        final = _final_with_fallbacks(final, first_pass, detail_passes)
+        analysis_status = _analysis_status(
+            final_truncated=final_truncated,
+            focus_queue=focus_queue,
+            budget=budget,
+        )
+        error = "final_synthesis: response was truncated or incomplete" if final_truncated else None
+
         result = _build_result(
             video_path=video_path,
             metadata=metadata,
@@ -534,7 +570,8 @@ class LabReviewAnalyzer(BaseAnalyzer):
             sampled_frames=sampled_frames,
             sampling_strategy=sampling_strategy,
             unfilled_focus_requests=focus_queue,
-            analysis_status="complete",
+            analysis_status=analysis_status,
+            error=error,
             checkpoint_path=checkpoint_path,
         )
         _write_checkpoint(
@@ -693,6 +730,237 @@ def _normalize_focus_requests(items: Any, duration_sec: float) -> list[dict]:
     )
 
 
+def _merge_focus_queue(
+    items: list[dict],
+    seen_windows: set[tuple[float, float]],
+    duration_sec: float,
+    overlap_threshold: float = 0.6,
+) -> list[dict]:
+    normalized = _normalize_focus_requests(items, duration_sec)
+    merged: list[dict] = []
+    for item in normalized:
+        if _overlaps_seen_windows(item, seen_windows, overlap_threshold):
+            continue
+        if any(_window_overlap_ratio(item, existing) >= overlap_threshold for existing in merged):
+            existing = next(
+                existing
+                for existing in merged
+                if _window_overlap_ratio(item, existing) >= overlap_threshold
+            )
+            existing["start_sec"] = round(
+                min(existing["start_sec"], item["start_sec"]),
+                2,
+            )
+            existing["end_sec"] = round(max(existing["end_sec"], item["end_sec"]), 2)
+            existing["reason"] = f"{existing['reason']} / {item['reason']}"
+            existing["priority"] = _higher_priority(existing["priority"], item["priority"])
+            continue
+        merged.append(item)
+    return _normalize_focus_requests(merged, duration_sec)
+
+
+def _overlaps_seen_windows(
+    window: dict,
+    seen_windows: set[tuple[float, float]],
+    overlap_threshold: float = 0.6,
+) -> bool:
+    return any(
+        _window_overlap_ratio(
+            window,
+            {"start_sec": start, "end_sec": end},
+        )
+        >= overlap_threshold
+        for start, end in seen_windows
+    )
+
+
+def _window_overlap_ratio(left: dict, right: dict) -> float:
+    left_start = float(left.get("start_sec") or 0)
+    left_end = float(left.get("end_sec") or left_start)
+    right_start = float(right.get("start_sec") or 0)
+    right_end = float(right.get("end_sec") or right_start)
+    overlap = max(0.0, min(left_end, right_end) - max(left_start, right_start))
+    shorter = max(0.01, min(left_end - left_start, right_end - right_start))
+    return overlap / shorter
+
+
+def _higher_priority(left: str, right: str) -> str:
+    priority_order = {"high": 0, "medium": 1, "low": 2}
+    return min(
+        [left, right],
+        key=lambda value: priority_order.get(str(value).lower(), 1),
+    )
+
+
+def _budget_context(
+    budget: RequestBudget,
+    sampled_frames: int,
+    max_sampled_frames: int,
+    detail_passes: list[dict],
+    max_focus_windows: int,
+    frames_per_focus: int,
+    reviewed_windows: list[dict],
+) -> dict:
+    remaining_frame_budget = max(0, max_sampled_frames - sampled_frames)
+    remaining_detail_windows = max(0, max_focus_windows - len(detail_passes))
+    remaining_detail_requests = max(0, budget.remaining - 1)
+    possible_detail_windows = min(remaining_detail_windows, remaining_detail_requests)
+    return {
+        "remaining_claude_requests_after_this_request": max(0, budget.remaining - 1),
+        "reserve_one_request_for_final_synthesis": True,
+        "remaining_detail_windows_after_this_request": possible_detail_windows,
+        "remaining_frame_budget_after_this_request": remaining_frame_budget,
+        "frames_per_focus_window": frames_per_focus,
+        "already_reviewed_windows": reviewed_windows,
+        "instruction": (
+            "Request only non-overlapping high-value windows. Most lab footage "
+            "is low information; spend follow-up windows on visible actions, "
+            "labels, measurements, transfers, instrument displays, and moments "
+            "where reproducibility depends on tacit details."
+        ),
+    }
+
+
+def _compact_detail_analysis(analysis: dict) -> dict:
+    return {
+        "observed_actions": _top_items(analysis.get("observed_actions") or [], 4),
+        "reproducibility_risks": _top_items(
+            analysis.get("reproducibility_risks") or [],
+            4,
+            severity_sort=True,
+        ),
+        "thumbs_up": _top_items(analysis.get("thumbs_up") or [], 3),
+        "notes": analysis.get("notes", ""),
+    }
+
+
+def _top_items(items: list[dict], limit: int, severity_sort: bool = False) -> list[dict]:
+    if not severity_sort:
+        return items[:limit]
+    severity_order = {"Very High": 0, "High": 1, "Medium": 2, "Low": 3}
+    return sorted(
+        items,
+        key=lambda item: (
+            severity_order.get(item.get("severity"), 4),
+            _to_float(item.get("timestamp_sec")) or 0,
+        ),
+    )[:limit]
+
+
+def _looks_like_complete_json_response(text: str) -> bool:
+    parsed = _parse_json_response(text, default={})
+    if not parsed:
+        return False
+    required = {"review_summary", "event_timeline", "reproducibility_metrics", "meta_advice"}
+    return required.issubset(parsed.keys())
+
+
+def _final_with_fallbacks(
+    final: dict,
+    first_pass: dict,
+    detail_passes: list[dict],
+) -> dict:
+    final = dict(final or {})
+    risks = _merge_detail_items(detail_passes, "reproducibility_risks")
+    actions = _merge_detail_items(detail_passes, "observed_actions")
+    good = _merge_detail_items(detail_passes, "thumbs_up")
+
+    final.setdefault("review_summary", first_pass.get("video_summary", ""))
+    final.setdefault("event_timeline", first_pass.get("event_timeline", []))
+    final.setdefault("observed_actions", actions)
+    final.setdefault("reproducibility_risks", risks)
+    final.setdefault("thumbs_up", good)
+    if not final.get("reproducibility_metrics"):
+        final["reproducibility_metrics"] = _fallback_metrics(risks, actions)
+    if not final.get("meta_advice"):
+        final["meta_advice"] = _fallback_meta_advice(risks, first_pass)
+    return final
+
+
+def _fallback_metrics(risks: list[dict], actions: list[dict]) -> list[dict]:
+    risk_text = " ".join(
+        f"{risk.get('action', '')} {risk.get('issue', '')}" for risk in risks
+    ).lower()
+    action_text = " ".join(action.get("action", "") for action in actions).lower()
+    return [
+        _metric(
+            "critical-parameters",
+            1 if any(term in risk_text for term in ["volume", "cell line", "passage", "label"]) else 2,
+            "Critical identities, labels, volumes, or passage details were frequently not visible.",
+            "Show labels and pipette settings; verbally state cell line, passage, reagent, and volume before each critical action.",
+        ),
+        _metric(
+            "materials-identification",
+            2 if risks else 3,
+            "Equipment was identifiable, but specific reagents/samples were often unclear.",
+            "Stage materials with labels facing the camera and capture a short pre-run inventory.",
+        ),
+        _metric(
+            "action-order",
+            3 if actions else 1,
+            "The broad order of movement through the lab is visible, but exact manipulations are intermittent.",
+            "Keep the camera fixed on the active work area during transitions and state each step before performing it.",
+        ),
+        _metric(
+            "measurement-capture",
+            1 if "display" in risk_text or "setting" in risk_text else 2,
+            "Quantitative settings/readouts were not consistently legible.",
+            "Pause on instrument displays, incubator settings, timers, and pipette dials long enough for capture.",
+        ),
+        _metric(
+            "timing-capture",
+            2,
+            "Video timestamps exist, but procedural timing and incubation durations were not explicitly documented.",
+            "Announce start/stop times for incubations, BSC work, and reagent exposure windows.",
+        ),
+    ]
+
+
+def _metric(metric: str, score: int, evidence: str, recommendation: str) -> dict:
+    return {
+        "metric": metric,
+        "score": score,
+        "evidence": evidence,
+        "recommendation": recommendation,
+    }
+
+
+def _fallback_meta_advice(risks: list[dict], first_pass: dict) -> dict:
+    top_fixes = []
+    for risk in risks:
+        fix = risk.get("suggested_fix")
+        if fix and fix not in top_fixes:
+            top_fixes.append(fix)
+        if len(top_fixes) >= 5:
+            break
+    if not top_fixes:
+        top_fixes = [
+            "Use a stable camera angle aimed at the active work area.",
+            "Verbally state sample IDs, reagent names, volumes, and timing.",
+            "Capture labels and instrument displays close enough to read.",
+        ]
+    return {
+        "overall_review": first_pass.get("video_summary", "")
+        or "The video captured broad workflow context, but key reproducibility details require clearer capture.",
+        "next_time": top_fixes,
+    }
+
+
+def _analysis_status(
+    final_truncated: bool,
+    focus_queue: list[dict],
+    budget: RequestBudget,
+) -> str:
+    if final_truncated:
+        return "partial"
+    high_priority_remaining = any(
+        str(item.get("priority", "")).lower() == "high" for item in focus_queue
+    )
+    if high_priority_remaining or (focus_queue and budget.remaining == 0):
+        return "partial"
+    return "complete"
+
+
 def _timestamps_for_window(
     start_sec: float,
     end_sec: float,
@@ -745,9 +1013,10 @@ def _build_result(
         or first_pass.get("video_summary", ""),
         "event_timeline": final.get("event_timeline")
         or first_pass.get("event_timeline", []),
-        "observed_actions": final.get("observed_actions") or merged_actions,
-        "reproducibility_risks": final.get("reproducibility_risks") or merged_risks,
-        "thumbs_up": final.get("thumbs_up") or merged_good,
+        "observed_actions": merged_actions or final.get("observed_actions", []),
+        "reproducibility_risks": merged_risks
+        or final.get("reproducibility_risks", []),
+        "thumbs_up": merged_good or final.get("thumbs_up", []),
         "reproducibility_metrics": final.get("reproducibility_metrics", []),
         "meta_advice": final.get("meta_advice", {}),
         "protocol": {

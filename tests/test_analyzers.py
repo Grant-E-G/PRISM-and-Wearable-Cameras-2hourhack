@@ -576,6 +576,145 @@ class TestLabReviewAnalyzer(unittest.TestCase):
                          "A transfer appears to happen.")
         self.assertEqual(checkpoint["request_budget"]["used_claude_requests"], 2)
 
+    def test_overlapping_focus_requests_are_suppressed(self):
+        from src.analyzers.lab_review_analyzer import LabReviewAnalyzer
+
+        first_pass = {
+            "video_summary": "Several events need follow-up.",
+            "event_timeline": [],
+            "focus_requests": [
+                {
+                    "start_sec": 100,
+                    "end_sec": 140,
+                    "reason": "Primary event.",
+                    "priority": "high",
+                },
+                {
+                    "start_sec": 110,
+                    "end_sec": 130,
+                    "reason": "Duplicate overlapping event.",
+                    "priority": "high",
+                },
+            ],
+            "low_information_ranges": [],
+            "notes": "",
+        }
+        detail = {
+            "observed_actions": [],
+            "reproducibility_risks": [],
+            "thumbs_up": [],
+            "focus_requests": [],
+            "notes": "",
+        }
+        final = {
+            "review_summary": "Review complete.",
+            "event_timeline": [],
+            "reproducibility_metrics": [],
+            "meta_advice": {},
+            "protocol": {},
+            "notes": "",
+        }
+
+        vlm = MagicMock()
+        vlm.provider = "claude"
+        vlm.analyze_frames.side_effect = [
+            json.dumps(first_pass),
+            json.dumps(detail),
+            json.dumps(final),
+        ]
+
+        with (
+            _patch_lab_review_metadata(200.0),
+            patch(
+                "src.analyzers.lab_review_analyzer.extract_frames_from_video_set",
+                return_value=[SAMPLE_FRAME],
+            ),
+            patch(
+                "src.analyzers.lab_review_analyzer.extract_frames_at_global_timestamps",
+                return_value=[{**SAMPLE_FRAME, "timestamp_sec": 100.0}],
+            ),
+        ):
+            result = LabReviewAnalyzer(vlm).analyze(
+                "fake.mp4",
+                max_claude_requests=4,
+                max_focus_windows=4,
+            )
+
+        self.assertEqual(len(result["detail_passes"]), 1)
+        self.assertEqual(vlm.analyze_frames.call_count, 3)
+
+    def test_truncated_final_response_marks_partial_and_adds_fallbacks(self):
+        from src.analyzers.lab_review_analyzer import LabReviewAnalyzer
+
+        first_pass = {
+            "video_summary": "A transfer appears to happen.",
+            "event_timeline": [],
+            "focus_requests": [
+                {
+                    "start_sec": 24,
+                    "end_sec": 36,
+                    "reason": "Need before/after transfer context.",
+                    "priority": "high",
+                }
+            ],
+            "low_information_ranges": [],
+            "notes": "",
+        }
+        detail = {
+            "observed_actions": [
+                {
+                    "timestamp_sec": 30,
+                    "action": "Transfer liquid",
+                    "materials": ["pipette"],
+                    "measurement": None,
+                    "confidence": "medium",
+                }
+            ],
+            "reproducibility_risks": [
+                {
+                    "timestamp_sec": 30,
+                    "action": "Transfer liquid",
+                    "issue": "Volume is not visible.",
+                    "severity": "High",
+                    "suggested_fix": "Show pipette setting.",
+                    "confidence": "high",
+                }
+            ],
+            "thumbs_up": [],
+            "focus_requests": [],
+            "notes": "",
+        }
+
+        vlm = MagicMock()
+        vlm.provider = "claude"
+        vlm.analyze_frames.side_effect = [
+            json.dumps(first_pass),
+            json.dumps(detail),
+            '{"review_summary": "cut off"',
+        ]
+
+        with (
+            _patch_lab_review_metadata(120.0),
+            patch(
+                "src.analyzers.lab_review_analyzer.extract_frames_from_video_set",
+                return_value=[SAMPLE_FRAME],
+            ),
+            patch(
+                "src.analyzers.lab_review_analyzer.extract_frames_at_global_timestamps",
+                return_value=[{**SAMPLE_FRAME, "timestamp_sec": 24.0}],
+            ),
+        ):
+            result = LabReviewAnalyzer(vlm).analyze(
+                "fake.mp4",
+                max_claude_requests=3,
+                max_sampled_frames=5,
+            )
+
+        self.assertEqual(result["analysis_status"], "partial")
+        self.assertIn("truncated", result["error"])
+        self.assertGreater(len(result["reproducibility_metrics"]), 0)
+        self.assertIn("next_time", result["meta_advice"])
+
 
 class TestVolumeAnalyzer(unittest.TestCase):
     def test_analyze_returns_volume(self):

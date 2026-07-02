@@ -11,10 +11,13 @@ windows. Output JSON is compatible with the included browser annotation viewer.
    build an approximate event timeline and identify low-information ranges.
 2. **Focused passes:** Claude requests short windows around meaningful actions,
    measurements, labels, transfers, displays, or other reproducibility-critical
-   moments.
+   moments. Each prompt includes the remaining request/window/frame budget so
+   Claude can spend follow-up sampling strategically instead of over-requesting
+   statelessly. Overlapping requested windows are merged or skipped locally.
 3. **Final review:** Claude summarizes what happened, extracts lab actions, and
    produces reproducibility risks, good practices, reproducibility metrics, and
-   protocol notes.
+   protocol notes. If final synthesis is truncated or omitted, the tool marks
+   the result as partial and fills metrics/advice from completed detail passes.
 4. **Annotated output:** the JSON can be loaded into the browser viewer with the
    source video to show timeline markers and on-video annotations.
 
