@@ -60,12 +60,40 @@ ANTHROPIC_API_KEY=sk-ant-...
 Run the default budgeted review:
 
 ```bash
-python main.py \
+./.conda/bin/python main.py \
   --video downloads/lab-video.mp4 \
   --output downloads/lab-video.annotations.json \
   --max-claude-requests 6 \
   --max-sampled-frames 70
 ```
+
+For split recordings, drop the chunk files into `recordings/`. Files are
+processed in filename sort order as one virtual timeline, so names like
+`001.mp4`, `002.mp4`, ... are preferred.
+
+```bash
+./.conda/bin/python main.py \
+  --video recordings/ \
+  --output downloads/lab-session.annotations.json \
+  --preset long_sparse
+```
+
+The `long_sparse` preset is intended for longer, mostly unedited recordings. It
+uses:
+
+```text
+coarse_interval_seconds = 90
+coarse_max_frames = 28
+detail_interval_seconds = 10
+frames_per_focus = 4
+max_focus_windows = 3
+max_claude_requests = 5
+max_sampled_frames = 40
+```
+
+For a 42 minute folder, that means about 28 coarse frames plus up to 12 focused
+detail frames before the final synthesis pass. That is intentionally much
+sparser than the one-minute test case.
 
 Before any Claude request is made, the CLI prints a cost estimate and asks:
 
@@ -79,7 +107,7 @@ created and before frames are uploaded.
 Tune the sparse sampling strategy:
 
 ```bash
-python main.py \
+./.conda/bin/python main.py \
   --video downloads/lab-video.mp4 \
   --output downloads/lab-video.annotations.json \
   --coarse-interval 45 \

@@ -49,6 +49,18 @@ DEFAULT_LAB_REVIEW_OPTIONS = {
     "max_claude_requests": 6,
     "max_sampled_frames": 70,
 }
+LAB_REVIEW_PRESETS = {
+    "default": {},
+    "long_sparse": {
+        "coarse_interval_seconds": 90.0,
+        "coarse_max_frames": 28,
+        "detail_interval_seconds": 10.0,
+        "frames_per_focus": 4,
+        "max_focus_windows": 3,
+        "max_claude_requests": 5,
+        "max_sampled_frames": 40,
+    },
+}
 FIRST_PASS_OUTPUT_TOKENS = 3072
 DETAIL_PASS_OUTPUT_TOKENS = 3072
 FINAL_SYNTHESIS_OUTPUT_TOKENS = 4096
@@ -67,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--video",
         required=True,
         metavar="PATH",
-        help="Path to the lab video file.",
+        help="Path to a lab video file or a folder of sorted video chunks.",
     )
     parser.add_argument(
         "--task",
@@ -126,6 +138,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override legacy max frames or lab_review coarse frame cap.",
     )
     parser.add_argument(
+        "--preset",
+        choices=sorted(LAB_REVIEW_PRESETS),
+        default="default",
+        help=(
+            "lab_review sampling preset. Use long_sparse for longer, mostly "
+            "unedited recordings."
+        ),
+    )
+    parser.add_argument(
         "--coarse-interval",
         type=float,
         default=None,
@@ -182,9 +203,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def estimate_lab_review_cost(video_path: str, model: str | None, options: dict) -> dict:
     """Estimate the configured worst-case Claude cost before uploading frames."""
-    from src.video_processor import get_video_metadata
+    from src.video_processor import get_video_set_metadata
 
-    metadata = get_video_metadata(video_path)
+    metadata = get_video_set_metadata(video_path)
     effective_options = {**DEFAULT_LAB_REVIEW_OPTIONS, **options}
     model_name = model or DEFAULT_CLAUDE_MODEL
     pricing = _pricing_for_model(model_name)
@@ -214,6 +235,7 @@ def estimate_lab_review_cost(video_path: str, model: str | None, options: dict) 
             "width": metadata.get("width"),
             "height": metadata.get("height"),
             "duration_sec": metadata.get("duration_sec"),
+            "chunk_count": metadata.get("chunk_count", 1),
         },
         "resized_frame": {
             "width": resized_width,
@@ -251,7 +273,8 @@ def confirm_lab_review_cost(cost: dict) -> bool:
     print(
         "  Video: "
         f"{video['width']}x{video['height']}, "
-        f"{video['duration_sec']}s",
+        f"{video['duration_sec']}s, "
+        f"{video.get('chunk_count', 1)} file(s)",
         file=sys.stderr,
     )
     print(
@@ -344,6 +367,7 @@ def main(argv: list[str] | None = None) -> int:
     # Build optional kwargs
     extra: dict = {}
     if args.task == "lab_review":
+        extra.update(LAB_REVIEW_PRESETS[args.preset])
         if args.interval is not None:
             extra["coarse_interval_seconds"] = args.interval
         if args.max_frames is not None:

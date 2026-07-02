@@ -9,9 +9,9 @@ from typing import Any
 
 from src.analyzers.base_analyzer import BaseAnalyzer
 from src.video_processor import (
-    extract_frames,
-    extract_frames_at_timestamps,
-    get_video_metadata,
+    extract_frames_at_global_timestamps,
+    extract_frames_from_video_set,
+    get_video_set_metadata,
 )
 
 
@@ -230,10 +230,10 @@ class LabReviewAnalyzer(BaseAnalyzer):
             raise ValueError("max_sampled_frames must be at least 1.")
 
         budget = RequestBudget(maximum=max_claude_requests)
-        metadata = get_video_metadata(video_path)
+        metadata = get_video_set_metadata(video_path)
 
         coarse_limit = min(coarse_max_frames, max_sampled_frames)
-        coarse_frames = extract_frames(
+        coarse_frames = extract_frames_from_video_set(
             video_path,
             interval_seconds=coarse_interval_seconds,
             max_frames=coarse_limit,
@@ -278,7 +278,7 @@ class LabReviewAnalyzer(BaseAnalyzer):
             if not timestamps:
                 continue
 
-            frames = extract_frames_at_timestamps(video_path, timestamps)
+            frames = extract_frames_at_global_timestamps(video_path, timestamps)
             if not frames:
                 continue
 
@@ -363,6 +363,9 @@ class LabReviewAnalyzer(BaseAnalyzer):
                 "coarse_sampled_timestamps_sec": [
                     frame["timestamp_sec"] for frame in coarse_frames
                 ],
+                "video_source_type": "folder"
+                if metadata.get("is_video_set")
+                else "file",
             },
             unfilled_focus_requests=focus_queue,
         )

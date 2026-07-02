@@ -136,11 +136,10 @@ class VLMClient:
         content: list[dict] = []
 
         for frame in frames:
-            ts = frame.get("timestamp_sec", "?")
             content.append(
                 {
                     "type": "text",
-                    "text": f"[Frame at {ts}s]",
+                    "text": _frame_label(frame),
                 }
             )
             content.append(
@@ -171,8 +170,7 @@ class VLMClient:
 
         parts = []
         for frame in frames:
-            ts = frame.get("timestamp_sec", "?")
-            parts.append(f"[Frame at {ts}s]")
+            parts.append(_frame_label(frame))
             image_data = base64.b64decode(frame["image_b64"])
             parts.append(
                 genai.types.Part.from_bytes(data=image_data, mime_type="image/jpeg")
@@ -193,7 +191,7 @@ class VLMClient:
     ) -> str:
         """Build an Ollama multimodal request and return the response text."""
         timestamps = "\n".join(
-            f"- Image {index + 1}: frame at {frame.get('timestamp_sec', '?')}s"
+            f"- Image {index + 1}: {_frame_label(frame)}"
             for index, frame in enumerate(frames)
         )
         payload = {
@@ -229,3 +227,16 @@ def _normalize_ollama_host(host: str) -> str:
     if host.startswith(("http://", "https://")):
         return host
     return f"http://{host}"
+
+
+def _frame_label(frame: dict) -> str:
+    timestamp = frame.get("timestamp_sec", "?")
+    source_path = frame.get("source_video_path")
+    local_timestamp = frame.get("local_timestamp_sec")
+    if source_path is None or local_timestamp is None:
+        return f"[Frame at {timestamp}s]"
+    return (
+        f"[Frame at global {timestamp}s; "
+        f"chunk {frame.get('source_video_index', '?')} "
+        f"{source_path} at local {local_timestamp}s]"
+    )

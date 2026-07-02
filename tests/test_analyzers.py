@@ -170,6 +170,41 @@ class TestJSONParsing(unittest.TestCase):
         self.assertEqual(result["total_volume_added_ml"], 250)
 
 
+class TestVideoSetMetadata(unittest.TestCase):
+    def test_folder_chunks_are_sorted_into_virtual_timeline(self):
+        import tempfile
+        from src.video_processor import get_video_set_metadata
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            folder = Path(tmpdir)
+            (folder / "chunk_002.mp4").write_bytes(b"")
+            (folder / "chunk_001.mp4").write_bytes(b"")
+            (folder / "ignore.txt").write_text("not video", encoding="utf-8")
+
+            def fake_metadata(path):
+                name = Path(path).name
+                duration = 10 if name == "chunk_001.mp4" else 20
+                return {
+                    "fps": 30,
+                    "total_frames": duration * 30,
+                    "duration_sec": duration,
+                    "width": 1280,
+                    "height": 720,
+                }
+
+            with patch("src.video_processor.get_video_metadata", side_effect=fake_metadata):
+                metadata = get_video_set_metadata(str(folder))
+
+        self.assertTrue(metadata["is_video_set"])
+        self.assertEqual(metadata["chunk_count"], 2)
+        self.assertEqual(metadata["duration_sec"], 30)
+        self.assertEqual(
+            [chunk["filename"] for chunk in metadata["chunks"]],
+            ["chunk_001.mp4", "chunk_002.mp4"],
+        )
+        self.assertEqual(metadata["chunks"][1]["start_sec"], 10)
+
+
 # ---------------------------------------------------------------------------
 # Analyzer tests (mocked VLM + video)
 # ---------------------------------------------------------------------------
@@ -202,9 +237,18 @@ def _patch_get_metadata(duration=60.0):
 
 def _patch_lab_review_metadata(duration=120.0):
     return patch(
-        "src.analyzers.lab_review_analyzer.get_video_metadata",
-        return_value={"fps": 30, "total_frames": int(duration * 30),
-                      "duration_sec": duration, "width": 1280, "height": 720},
+        "src.analyzers.lab_review_analyzer.get_video_set_metadata",
+        return_value={
+            "source": "fake.mp4",
+            "is_video_set": False,
+            "chunk_count": 1,
+            "chunks": [],
+            "fps": 30,
+            "total_frames": int(duration * 30),
+            "duration_sec": duration,
+            "width": 1280,
+            "height": 720,
+        },
     )
 
 
@@ -441,11 +485,11 @@ class TestLabReviewAnalyzer(unittest.TestCase):
         with (
             _patch_lab_review_metadata(120.0),
             patch(
-                "src.analyzers.lab_review_analyzer.extract_frames",
+                "src.analyzers.lab_review_analyzer.extract_frames_from_video_set",
                 return_value=[SAMPLE_FRAME],
             ),
             patch(
-                "src.analyzers.lab_review_analyzer.extract_frames_at_timestamps",
+                "src.analyzers.lab_review_analyzer.extract_frames_at_global_timestamps",
                 return_value=[{**SAMPLE_FRAME, "timestamp_sec": 24.0}],
             ),
         ):
@@ -650,8 +694,12 @@ class TestCLI(unittest.TestCase):
         from main import estimate_lab_review_cost
 
         with patch(
-            "src.video_processor.get_video_metadata",
+            "src.video_processor.get_video_set_metadata",
             return_value={
+                "source": "portrait.mp4",
+                "is_video_set": False,
+                "chunk_count": 1,
+                "chunks": [],
                 "fps": 30,
                 "total_frames": 1800,
                 "duration_sec": 60,

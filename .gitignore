@@ -12,6 +12,8 @@ build/
 develop-eggs/
 dist/
 downloads/
+recordings/*
+!recordings/.gitkeep
 eggs/
 .eggs/
 lib/
