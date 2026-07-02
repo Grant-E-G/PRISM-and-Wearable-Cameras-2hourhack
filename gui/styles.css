@@ -249,7 +249,83 @@ video {
 .annotation-list {
   display: grid;
   gap: 10px;
-  margin-top: 12px;
+  margin-top: 14px;
+}
+
+.review-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.review-section {
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.review-section h2 {
+  margin: 0 0 7px;
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.review-section p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.review-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.metric-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.metric {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.metric-score {
+  display: grid;
+  place-items: center;
+  min-height: 36px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.metric h3 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.metric p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .annotation {

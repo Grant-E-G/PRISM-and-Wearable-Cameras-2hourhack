@@ -157,6 +157,13 @@ Return only valid JSON in this shape:
       "recommendation": "<how to improve capture or protocol>"
     }
   ],
+  "meta_advice": {
+    "overall_review": "<plain-language review of how well the procedure was captured>",
+    "next_time": [
+      "<concrete change that would make the next recording/protocol more reproducible>",
+      "..."
+    ]
+  },
   "protocol": {
     "title": "Lab Video Review",
     "materials": ["<visible or strongly implied material>", "..."],
@@ -490,6 +497,7 @@ def _build_result(
         "reproducibility_risks": final.get("reproducibility_risks") or merged_risks,
         "thumbs_up": final.get("thumbs_up") or merged_good,
         "reproducibility_metrics": final.get("reproducibility_metrics", []),
+        "meta_advice": final.get("meta_advice", {}),
         "protocol": {
             "title": protocol.get("title", "Lab Video Review"),
             "materials": protocol.get("materials", []),

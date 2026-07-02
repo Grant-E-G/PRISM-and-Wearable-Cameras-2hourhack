@@ -417,6 +417,10 @@ class TestLabReviewAnalyzer(unittest.TestCase):
                     "recommendation": "Capture labels and volumes.",
                 }
             ],
+            "meta_advice": {
+                "overall_review": "The transfer was visible, but key parameters were missing.",
+                "next_time": ["Show pipette settings before transfer."],
+            },
             "protocol": {
                 "title": "Lab Video Review",
                 "materials": ["tube", "pipette"],
@@ -458,6 +462,10 @@ class TestLabReviewAnalyzer(unittest.TestCase):
                          "Transfer liquid into a tube")
         self.assertEqual(result["reproducibility_risks"][0]["severity"], "High")
         self.assertEqual(result["reproducibility_metrics"][0]["score"], 2)
+        self.assertEqual(
+            result["meta_advice"]["next_time"][0],
+            "Show pipette settings before transfer.",
+        )
 
     def test_claude_only_enforced(self):
         from src.analyzers.lab_review_analyzer import LabReviewAnalyzer

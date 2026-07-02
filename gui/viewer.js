@@ -5,6 +5,7 @@ const ACTIVE_WINDOW_SECONDS = 1.35;
 const video = document.querySelector("#video");
 const overlay = document.querySelector("#overlay");
 const timeline = document.querySelector("#timeline");
+const reviewPanel = document.querySelector("#reviewPanel");
 const annotationList = document.querySelector("#annotationList");
 const timecode = document.querySelector("#timecode");
 const videoTitle = document.querySelector("#videoTitle");
@@ -32,6 +33,13 @@ const formatTime = (seconds) => {
 
 const severityClass = (severity = "") =>
   severity.toLowerCase().replace(/\s+/g, "-");
+
+const escapeHTML = (value = "") => String(value)
+  .replaceAll("&", "&amp;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;")
+  .replaceAll('"', "&quot;")
+  .replaceAll("'", "&#039;");
 
 const normalize = (data) => [
   ...(data.reproducibility_risks || []).map((item, index) => ({
@@ -120,6 +128,70 @@ const renderPanel = () => {
   `).join("");
 };
 
+const renderReview = (data = {}) => {
+  const metaAdvice = data.meta_advice || {};
+  const overallReview = metaAdvice.overall_review || data.review_summary || "";
+  const metrics = data.reproducibility_metrics || [];
+  const metricAdvice = metrics
+    .map((item) => item.recommendation)
+    .filter(Boolean);
+  const nextTime = metaAdvice.next_time || metricAdvice;
+  const uncertainties = data.protocol?.uncertainties || [];
+  const notes = data.notes || "";
+
+  if (!overallReview && nextTime.length === 0 && metrics.length === 0 && !notes) {
+    reviewPanel.innerHTML = "";
+    return;
+  }
+
+  reviewPanel.innerHTML = `
+    ${overallReview ? `
+      <section class="review-section">
+        <h2>Overall Review</h2>
+        <p>${escapeHTML(overallReview)}</p>
+      </section>
+    ` : ""}
+    ${nextTime.length > 0 ? `
+      <section class="review-section">
+        <h2>Next Time</h2>
+        <ul class="review-list">
+          ${nextTime.map((item) => `<li>${escapeHTML(item)}</li>`).join("")}
+        </ul>
+      </section>
+    ` : ""}
+    ${metrics.length > 0 ? `
+      <section class="review-section">
+        <h2>Reproducibility Metrics</h2>
+        <div class="metric-grid">
+          ${metrics.map((item) => `
+            <article class="metric">
+              <div class="metric-score">${escapeHTML(item.score ?? "?")}/5</div>
+              <div>
+                <h3>${escapeHTML(item.metric || "Metric")}</h3>
+                ${item.evidence ? `<p>${escapeHTML(item.evidence)}</p>` : ""}
+              </div>
+            </article>
+          `).join("")}
+        </div>
+      </section>
+    ` : ""}
+    ${uncertainties.length > 0 ? `
+      <section class="review-section">
+        <h2>Open Uncertainties</h2>
+        <ul class="review-list">
+          ${uncertainties.map((item) => `<li>${escapeHTML(item)}</li>`).join("")}
+        </ul>
+      </section>
+    ` : ""}
+    ${notes ? `
+      <section class="review-section">
+        <h2>Notes</h2>
+        <p>${escapeHTML(notes)}</p>
+      </section>
+    ` : ""}
+  `;
+};
+
 const renderActivePanelState = (items) => {
   activeAnnotationKeys = new Set(items.map((item) => item.id));
   annotationList.querySelectorAll("[data-id]").forEach((card) => {
@@ -168,6 +240,7 @@ const loadAnnotations = async (source) => {
   const data = await response.json();
   annotations = normalize(data);
   videoTitle.textContent = data.protocol?.title || "Yeast transformation protocol";
+  renderReview(data);
   renderPanel();
   renderTimeline();
   render();
@@ -176,6 +249,7 @@ const loadAnnotations = async (source) => {
 video.src = DEFAULT_VIDEO;
 loadAnnotations(DEFAULT_ANNOTATIONS).catch(() => {
   annotations = [];
+  renderReview();
   renderPanel();
   render();
 });
@@ -244,6 +318,7 @@ annotationFile.addEventListener("change", async () => {
   const data = JSON.parse(await file.text());
   annotations = normalize(data);
   videoTitle.textContent = data.protocol?.title || videoTitle.textContent;
+  renderReview(data);
   renderPanel();
   renderTimeline();
   render();
